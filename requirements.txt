@@ -1,0 +1,5 @@
+numpy
+fuel
+matplotlib
+python-utils>=2.0.0 # for fuel-download
+ipython
