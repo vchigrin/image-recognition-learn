@@ -1,0 +1,9 @@
+Sigmoid units
+
+----Train Generation 55
+Training set error rate 0.0709523809524 based on 39900 samples (2831)
+Validation set error rate 0.0814285714286 based on 2100 samples (171)
+We get WORSE results. stopping on 55 iteration
+Validation set BEST NET error rate 0.0809523809524 based on 2100 samples (170)
+Training finished. Write result...
+
