@@ -7,8 +7,9 @@ import fuel.streams
 import fuel.transformers
 import itertools
 
-N_OUTPUT_UNITS = 10
 N_L0_UNITS = 25
+N_L1_UNITS = 15
+N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
@@ -24,8 +25,10 @@ class Network(object):
   def __init__(self):
     self._l0_coef = Network._rand_matrix(N_L0_UNITS, INPUT_SIZE)
     self._l0_bias = Network._rand_matrix(N_L0_UNITS, 1)
-    self._l1_coef = Network._rand_matrix(N_OUTPUT_UNITS, N_L0_UNITS)
-    self._l1_bias = Network._rand_matrix(N_OUTPUT_UNITS, 1)
+    self._l1_coef = Network._rand_matrix(N_L1_UNITS, N_L0_UNITS)
+    self._l1_bias = Network._rand_matrix(N_L1_UNITS, 1)
+    self._out_coef = Network._rand_matrix(N_OUTPUT_UNITS, N_L1_UNITS)
+    self._out_bias = Network._rand_matrix(N_OUTPUT_UNITS, 1)
 
   @staticmethod
   def _rand_matrix(n_rows, n_columns):
@@ -50,34 +53,44 @@ class Network(object):
     result = val_exp / denominator
     return result
 
-  def learn_batch(self, sample_matrices, labels):
+  def learn_batch(self, sample_matrices, labels, learn_rate):
+    out_coef_gradients = np.zeros(self._out_coef.shape)
+    out_bias_gradients = np.zeros(self._out_bias.shape)
     l1_coef_gradients = np.zeros(self._l1_coef.shape)
     l1_bias_gradients = np.zeros(self._l1_bias.shape)
     l0_coef_gradients = np.zeros(self._l0_coef.shape)
     l0_bias_gradients = np.zeros(self._l0_bias.shape)
     batch_size = 0
     for sample_matrix, label in itertools.izip(sample_matrices, labels):
-      l1_coef, l1_bias, l0_coef, l0_bias = self._process_sample(
+      out_coef, out_bias, l1_coef, l1_bias, l0_coef, l0_bias = self._process_sample(
           sample_matrix,  label)
+      out_coef_gradients += out_coef
+      out_bias_gradients += out_bias
       l1_coef_gradients += l1_coef
       l1_bias_gradients += l1_bias
       l0_coef_gradients += l0_coef
       l0_bias_gradients += l0_bias
       batch_size += 1
     # Average over all samples:
+    out_coef_gradients /= batch_size
+    out_bias_gradients /= batch_size
     l1_coef_gradients /= batch_size
     l1_bias_gradients /= batch_size
     l0_coef_gradients /= batch_size
     l0_bias_gradients /= batch_size
+    assert not np.any(np.isnan(out_coef_gradients))
+    assert not np.any(np.isnan(out_bias_gradients))
     assert not np.any(np.isnan(l1_coef_gradients))
     assert not np.any(np.isnan(l1_bias_gradients))
     assert not np.any(np.isnan(l0_coef_gradients))
     assert not np.any(np.isnan(l0_bias_gradients))
     # Update:
-    self._l1_coef -= LEARN_RATE * l1_coef_gradients
-    self._l1_bias -= LEARN_RATE * l1_bias_gradients
-    self._l0_coef -= LEARN_RATE * l0_coef_gradients
-    self._l0_bias -= LEARN_RATE * l0_bias_gradients
+    self._out_coef -= learn_rate * out_coef_gradients
+    self._out_bias -= learn_rate * out_bias_gradients
+    self._l1_coef -= learn_rate * l1_coef_gradients
+    self._l1_bias -= learn_rate * l1_bias_gradients
+    self._l0_coef -= learn_rate * l0_coef_gradients
+    self._l0_bias -= learn_rate * l0_bias_gradients
 
 
   def _process_sample(self, sample_data, label):
@@ -92,14 +105,30 @@ class Network(object):
     l0_activations = Network._relu(l0_activations_input)
 
     l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
-    assert l1_activations_input.shape == (N_OUTPUT_UNITS, 1)
-    l1_activations = Network._softmax(l1_activations_input)
+    assert l1_activations_input.shape == (N_L1_UNITS, 1)
+    l1_activations = Network._relu(l1_activations_input)
+
+    out_activations_input = np.dot(self._out_coef, l1_activations) + self._out_bias
+    assert out_activations_input.shape == (N_OUTPUT_UNITS, 1)
+    out_activations = Network._softmax(out_activations_input)
 
     expected_output = np.zeros([N_OUTPUT_UNITS, 1])
     expected_output[label, 0] = 1
     # Back-propagate errors
-    common_l1_grad = l1_activations - expected_output
-    assert common_l1_grad.shape == (N_OUTPUT_UNITS, 1)
+    common_out_grad = out_activations - expected_output
+    assert common_out_grad.shape == (N_OUTPUT_UNITS, 1)
+    out_coef_gradients = np.dot(common_out_grad, np.transpose(l1_activations))
+    assert out_coef_gradients.shape == self._out_coef.shape
+    out_bias_gradients = common_out_grad
+
+    l1_grad_input = np.dot(np.transpose(self._out_coef), common_out_grad)
+    assert l1_grad_input.shape == (N_L1_UNITS, 1)
+    common_l1_grad = l1_activations.copy()
+    common_l1_grad[common_l1_grad > 0] = 1
+    common_l1_grad[common_l1_grad < 0] = 0.1
+    common_l1_grad *= l1_grad_input
+
+    assert common_l1_grad.shape == (N_L1_UNITS, 1)
     l1_coef_gradients = np.dot(common_l1_grad, np.transpose(l0_activations))
     assert l1_coef_gradients.shape == self._l1_coef.shape
     l1_bias_gradients = common_l1_grad
@@ -115,8 +144,8 @@ class Network(object):
     l0_coef_gradients = np.dot(common_l0_grad, np.transpose(sample_data))
     assert l0_coef_gradients.shape == self._l0_coef.shape
     l0_bias_gradients = common_l0_grad
-
-    return (l1_coef_gradients, l1_bias_gradients,
+    return (out_coef_gradients, out_bias_gradients,
+        l1_coef_gradients, l1_bias_gradients,
         l0_coef_gradients, l0_bias_gradients)
 
   def recognize_sample(self, sample_data):
@@ -127,9 +156,13 @@ class Network(object):
     l0_activations = Network._relu(l0_activation_input)
 
     l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
-    assert l1_activations_input.shape == (N_OUTPUT_UNITS, 1)
-    l1_activations = Network._softmax(l1_activations_input)
-    return np.argmax(l1_activations)
+    assert l1_activations_input.shape == (N_L1_UNITS, 1)
+    l1_activations = Network._relu(l1_activations_input)
+
+    out_activations_input = np.dot(self._out_coef, l1_activations) + self._out_bias
+    assert out_activations_input.shape == (N_OUTPUT_UNITS, 1)
+    out_activations = Network._softmax(out_activations_input)
+    return np.argmax(out_activations)
 
 def count_errors(network, stream):
   num_errors = 0
