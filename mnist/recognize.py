@@ -13,13 +13,15 @@ N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
-LEARN_RATE = 0.05
-N_GENERATIONS = 300
+START_LEARN_RATE = 0.7
+MIN_LEARN_RATE = 0.0005
+N_GENERATIONS = 200
 BATCH_SIZE = 100
-VALIDATION_DATA_PART = 0.05
+VALIDATION_DATA_PART = 0.1
 # If validation error will be worse then the best seen that number
 # of epochs in row, we'll stop learning and use best model that we've found.
 NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
+NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 4
 
 class Network(object):
   def __init__(self):
@@ -282,30 +284,39 @@ def main():
       batch_size=BATCH_SIZE)
   cross_validation_schemes = list(cross_validation_generator)
   num_worse = 0
+  num_worse_for_rate = 0
+  learn_rate = START_LEARN_RATE
   for i in xrange(N_GENERATIONS):
     train_scheme, validation_scheme = cross_validation_schemes[
         i % len(cross_validation_schemes)]
-    print '----Train Generation {}'.format(i)
+    print '----Train Generation {} at rate {}'.format(i, learn_rate)
     for request in train_scheme.get_request_iterator():
       samples = [data[p] for p in request]
       cur_labels = [labels[p] for p in request]
-      network.learn_batch(samples, cur_labels)
+      network.learn_batch(samples, cur_labels, learn_rate)
     num_errors, num_examples = count_errors_scheme(network, data, labels, train_scheme)
     print 'Training set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
     num_errors, num_examples = count_errors_scheme(network, data, labels, validation_scheme)
     print 'Validation set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
-    if best_net is None or num_errors <= best_validation_errors:
+    if best_net is None or num_errors < best_validation_errors:
       print 'Updating best model'
       best_net = copy.deepcopy(network)
       best_validation_errors = num_errors
       num_worse = 0
+      num_worse_for_rate = 0
     else:
-      print 'We get WORSE results. on {} iteration. Total bad results {}'.format(i, num_worse)
       num_worse += 1
+      num_worse_for_rate += 1
+      print 'We get WORSE results. on {} iteration. Total bad results {}'.format(i, num_worse)
       if num_worse >= NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP:
         break
+      if num_worse_for_rate >= NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE:
+        learn_rate = max(learn_rate / 2., MIN_LEARN_RATE)
+        print 'DECREASING LEARN RATE TO {}'.format(learn_rate)
+        num_worse_for_rate = 0
+
   print 'Training finished. Write result...'
   data, _ = load_csv('kaggle/test.csv', False)
   with open('kaggle/report-vchigrin.csv', 'w') as f:
