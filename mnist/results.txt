@@ -24,3 +24,10 @@ We get WORSE results. stopping on 13 iteration
 Validation set BEST NET error rate 0.0695238095238 based on 2100 samples (146)
 Training finished. Write result...
 
+25 neurons in hidden layer, slower learning rate
+----Train Generation 34
+Training set error rate 0.0480701754386 based on 39900 samples (1918)
+Validation set error rate 0.0571428571429 based on 2100 samples (120)
+We get WORSE results. stopping on 34 iteration
+Validation set BEST NET error rate 0.0566666666667 based on 2100 samples (119)
+
