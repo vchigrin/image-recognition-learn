@@ -7,3 +7,12 @@ We get WORSE results. stopping on 55 iteration
 Validation set BEST NET error rate 0.0809523809524 based on 2100 samples (170)
 Training finished. Write result...
 
+Softmax output unit
+
+----Train Generation 31
+Training set error rate 0.0597994987469 based on 39900 samples (2386)
+Validation set error rate 0.07 based on 2100 samples (147)
+We get WORSE results. stopping on 31 iteration
+Validation set BEST NET error rate 0.0695238095238 based on 2100 samples (146)
+Training finished. Write result...
+

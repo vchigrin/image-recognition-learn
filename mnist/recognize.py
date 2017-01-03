@@ -32,6 +32,14 @@ class Network(object):
   def _sigmoid(val):
     return 1 / (1 + np.exp(-val))
 
+  @staticmethod
+  def _softmax(input_values):
+    values = input_values.copy()
+    values = values - values.min()
+    val_exp = np.exp(values)
+    denominator = val_exp.sum()
+    result = val_exp / denominator
+    return result
 
   def learn_batch(self, sample_matrices, labels):
     l1_coef_gradients = np.zeros(self._l1_coef.shape)
@@ -76,13 +84,12 @@ class Network(object):
 
     l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
     assert l1_activations_input.shape == (N_OUTPUT_UNITS, 1)
-    l1_activations = Network._sigmoid(l1_activations_input)
+    l1_activations = Network._softmax(l1_activations_input)
 
     expected_output = np.zeros([N_OUTPUT_UNITS, 1])
     expected_output[label, 0] = 1
     # Back-propagate errors
-    common_l1_grad = (2 * (l1_activations - expected_output) *
-        l1_activations * (1 - l1_activations))
+    common_l1_grad = l1_activations - expected_output
     assert common_l1_grad.shape == (N_OUTPUT_UNITS, 1)
     l1_coef_gradients = np.dot(common_l1_grad, np.transpose(l0_activations))
     assert l1_coef_gradients.shape == self._l1_coef.shape
@@ -108,7 +115,7 @@ class Network(object):
 
     l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
     assert l1_activations_input.shape == (N_OUTPUT_UNITS, 1)
-    l1_activations = Network._sigmoid(l1_activations_input)
+    l1_activations = Network._softmax(l1_activations_input)
     return np.argmax(l1_activations)
 
 def count_errors(network, stream):
