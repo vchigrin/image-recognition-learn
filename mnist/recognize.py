@@ -169,82 +169,15 @@ class Network(object):
 def count_errors(network, stream):
   num_errors = 0
   num_examples = 0
-  for sample_matrices, labels in stream.get_epoch_iterator():
-    for sample, label in itertools.izip(sample_matrices, labels):
+  for batches in stream.get_epoch_iterator():
+    label_to_batch = dict(zip(stream.sources, batches))
+    for sample, label in itertools.izip(
+        label_to_batch['pixels'], label_to_batch['labels']):
       num_examples += 1
       output_label = network.recognize_sample(sample)
       if label[0] != output_label:
         num_errors += 1
   return num_errors, num_examples
-
-def count_errors_scheme(network, data, labels, iteration_scheme):
-  num_errors = 0
-  num_examples = 0
-  for request in iteration_scheme.get_request_iterator():
-    for index in request:
-      num_examples += 1
-      sample = data[index]
-      label = labels[index]
-      output_label = network.recognize_sample(sample)
-      if label != output_label:
-        num_errors += 1
-  return num_errors, num_examples
-
-def count_errors_lists(network, data_items, label_items):
-  num_errors = 0
-  for sample, label in itertools.izip(data_items, label_items):
-    output_label = network.recognize_sample(sample)
-    if label != output_label:
-      num_errors += 1
-  return num_errors
-
-
-def main_fuel():
-  dataset = fuel.datasets.mnist.MNIST(('train',))
-  network = Network()
-  num_train_examples = int(dataset.num_examples * (1 - VALIDATION_DATA_PART))
-  train_stream = fuel.transformers.Flatten(
-      fuel.streams.DataStream.default_stream(
-          dataset=dataset,
-          iteration_scheme=fuel.schemes.SequentialScheme(
-              examples=num_train_examples,
-              batch_size=BATCH_SIZE)))
-  validation_stream = fuel.transformers.Flatten(
-      fuel.streams.DataStream.default_stream(
-          dataset=dataset,
-          iteration_scheme=fuel.schemes.SequentialScheme(
-              examples=range(num_train_examples,  dataset.num_examples),
-              batch_size=BATCH_SIZE)))
-  for i in xrange(N_GENERATIONS):
-    print '----Generation {}'.format(i)
-#    samples = dataset.get_data(h,None)
-#    for data, label in itertools.izip(samples[0], samples[1]):
-    for data, label in train_stream.get_epoch_iterator():
-      network.learn_batch(data, label)
-    num_errors, num_samples = count_errors(network, train_stream)
-    print 'Training set error rate {} based on {} samples ({})'.format(
-        float(num_errors) / num_samples, num_samples, num_errors)
-    num_errors, num_samples = count_errors(network, validation_stream)
-    print 'Validation set error rate {} based on {} samples ({})'.format(
-        float(num_errors) / num_samples, num_samples, num_errors)
-    train_stream.next_epoch()
-    validation_stream.next_epoch()
-  stream.close()
-
-def to_batches(items):
-  batch = []
-  it = items.__iter__()
-  while True:
-    if len(batch) == BATCH_SIZE:
-      yield batch
-      batch = []
-    else:
-      try:
-        batch.append(it.next())
-      except StopIteration:
-        break
-  if batch:
-    yield batch
 
 
 def load_csv(file_name, has_label):
@@ -263,22 +196,18 @@ def load_csv(file_name, has_label):
       data_arrays.append(data)
   return data_arrays, label_arrays
 
+
 def main():
   network = Network()
-  data, labels = load_csv('kaggle/train.csv', True)
-  num_validation_examples = int(len(data) * VALIDATION_DATA_PART)
-  num_train_examples = len(data) - num_validation_examples
-  print 'Data loaded. Train {} validation {}'.format(
-       num_train_examples, num_validation_examples)
-#  train_data = data[:num_train_examples]
-#  train_labels = labels[:num_train_examples]
-#  validation_data = data[num_train_examples:]
-#  validation_labels = labels[num_train_examples:]
+  dataset = fuel.datasets.H5PYDataset(
+      'kaggle-mnist.hdf5', which_sets=('train',))
+  print 'Data loaded. Total examples {}'.format(
+       dataset.num_examples)
   best_net = None
   best_validation_errors = 0
   cross_validation_generator = fuel.schemes.cross_validation(
       fuel.schemes.SequentialScheme,
-      num_examples=len(data),
+      num_examples=dataset.num_examples,
       num_folds = int(1/VALIDATION_DATA_PART),
       strict=True,
       batch_size=BATCH_SIZE)
@@ -289,15 +218,24 @@ def main():
   for i in xrange(N_GENERATIONS):
     train_scheme, validation_scheme = cross_validation_schemes[
         i % len(cross_validation_schemes)]
+    train_stream = fuel.transformers.Flatten(
+        fuel.streams.DataStream.default_stream(
+            dataset=dataset,
+            iteration_scheme=train_scheme))
     print '----Train Generation {} at rate {}'.format(i, learn_rate)
-    for request in train_scheme.get_request_iterator():
-      samples = [data[p] for p in request]
-      cur_labels = [labels[p] for p in request]
-      network.learn_batch(samples, cur_labels, learn_rate)
-    num_errors, num_examples = count_errors_scheme(network, data, labels, train_scheme)
+    for batches in train_stream.get_epoch_iterator():
+      label_to_batch = dict(zip(train_stream.sources, batches))
+      network.learn_batch(
+          label_to_batch['pixels'],
+          label_to_batch['labels'], learn_rate)
+    num_errors, num_examples = count_errors(network, train_stream)
     print 'Training set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
-    num_errors, num_examples = count_errors_scheme(network, data, labels, validation_scheme)
+    validation_stream = fuel.transformers.Flatten(
+        fuel.streams.DataStream.default_stream(
+            dataset=dataset,
+            iteration_scheme=validation_scheme))
+    num_errors, num_examples = count_errors(network, validation_stream)
     print 'Validation set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
     if best_net is None or num_errors < best_validation_errors:
