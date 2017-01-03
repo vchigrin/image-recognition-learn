@@ -33,6 +33,12 @@ class Network(object):
     return 1 / (1 + np.exp(-val))
 
   @staticmethod
+  def _relu(val):
+    result = val.copy()
+    result[result < 0] *= 0.1
+    return result
+
+  @staticmethod
   def _softmax(input_values):
     values = input_values.copy()
     values = values - values.min()
@@ -80,7 +86,7 @@ class Network(object):
     sample_data = sample_data.reshape(INPUT_SIZE, 1)
     l0_activations_input = np.dot(self._l0_coef, sample_data) + self._l0_bias
     assert l0_activations_input.shape == (N_L0_UNITS, 1)
-    l0_activations = Network._sigmoid(l0_activations_input)
+    l0_activations = Network._relu(l0_activations_input)
 
     l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
     assert l1_activations_input.shape == (N_OUTPUT_UNITS, 1)
@@ -97,7 +103,11 @@ class Network(object):
 
     l0_grad_input = np.dot(np.transpose(self._l1_coef), common_l1_grad)
     assert l0_grad_input.shape == (N_L0_UNITS, 1)
-    common_l0_grad = l0_activations * (1 - l0_activations) * l0_grad_input
+    common_l0_grad = l0_activations.copy()
+    common_l0_grad[common_l0_grad > 0] = 1
+    common_l0_grad[common_l0_grad < 0] = 0.1
+    common_l0_grad *= l0_grad_input
+
     assert common_l0_grad.shape == (N_L0_UNITS, 1)
     l0_coef_gradients = np.dot(common_l0_grad, np.transpose(sample_data))
     assert l0_coef_gradients.shape == self._l0_coef.shape
@@ -111,7 +121,7 @@ class Network(object):
     sample_data = sample_data.reshape(INPUT_SIZE, 1)
     l0_activation_input = np.dot(self._l0_coef, sample_data) + self._l0_bias
     assert l0_activation_input.shape == (N_L0_UNITS, 1)
-    l0_activations = Network._sigmoid(l0_activation_input)
+    l0_activations = Network._relu(l0_activation_input)
 
     l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
     assert l1_activations_input.shape == (N_OUTPUT_UNITS, 1)
