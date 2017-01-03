@@ -16,6 +16,9 @@ LEARN_RATE = 0.05
 N_GENERATIONS = 300
 BATCH_SIZE = 100
 VALIDATION_DATA_PART = 0.05
+# If validation error will be worse then the best seen that number
+# of epochs in row, we'll stop learning and use best model that we've found.
+NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
 
 class Network(object):
   def __init__(self):
@@ -139,6 +142,19 @@ def count_errors(network, stream):
         num_errors += 1
   return num_errors, num_examples
 
+def count_errors_scheme(network, data, labels, iteration_scheme):
+  num_errors = 0
+  num_examples = 0
+  for request in iteration_scheme.get_request_iterator():
+    for index in request:
+      num_examples += 1
+      sample = data[index]
+      label = labels[index]
+      output_label = network.recognize_sample(sample)
+      if label != output_label:
+        num_errors += 1
+  return num_errors, num_examples
+
 def count_errors_lists(network, data_items, label_items):
   num_errors = 0
   for sample, label in itertools.izip(data_items, label_items):
@@ -219,34 +235,44 @@ def main():
   num_train_examples = len(data) - num_validation_examples
   print 'Data loaded. Train {} validation {}'.format(
        num_train_examples, num_validation_examples)
-  train_data = data[:num_train_examples]
-  train_labels = labels[:num_train_examples]
-  validation_data = data[num_train_examples:]
-  validation_labels = labels[num_train_examples:]
+#  train_data = data[:num_train_examples]
+#  train_labels = labels[:num_train_examples]
+#  validation_data = data[num_train_examples:]
+#  validation_labels = labels[num_train_examples:]
   best_net = None
   best_validation_errors = 0
+  cross_validation_generator = fuel.schemes.cross_validation(
+      fuel.schemes.SequentialScheme,
+      num_examples=len(data),
+      num_folds = int(1/VALIDATION_DATA_PART),
+      strict=True,
+      batch_size=BATCH_SIZE)
+  cross_validation_schemes = list(cross_validation_generator)
+  num_worse = 0
   for i in xrange(N_GENERATIONS):
+    train_scheme, validation_scheme = cross_validation_schemes[
+        i % len(cross_validation_schemes)]
     print '----Train Generation {}'.format(i)
-    for pairs in to_batches(itertools.izip(train_data, train_labels)):
-      samples = [p[0] for p in pairs]
-      labels = [p[1] for p in pairs]
-      network.learn_batch(samples, labels)
-    num_errors = count_errors_lists(network, train_data, train_labels)
+    for request in train_scheme.get_request_iterator():
+      samples = [data[p] for p in request]
+      cur_labels = [labels[p] for p in request]
+      network.learn_batch(samples, cur_labels)
+    num_errors, num_examples = count_errors_scheme(network, data, labels, train_scheme)
     print 'Training set error rate {} based on {} samples ({})'.format(
-        float(num_errors) / len(train_data), len(train_data), num_errors)
-    num_errors = count_errors_lists(network, validation_data, validation_labels)
+        float(num_errors) / num_examples, num_examples, num_errors)
+    num_errors, num_examples = count_errors_scheme(network, data, labels, validation_scheme)
     print 'Validation set error rate {} based on {} samples ({})'.format(
-        float(num_errors) / len(validation_data), len(validation_data), num_errors)
+        float(num_errors) / num_examples, num_examples, num_errors)
     if best_net is None or num_errors <= best_validation_errors:
       print 'Updating best model'
       best_net = copy.deepcopy(network)
       best_validation_errors = num_errors
+      num_worse = 0
     else:
-      print 'We get WORSE results. stopping on {} iteration'.format(i)
-      break
-  num_errors = count_errors_lists(best_net, validation_data, validation_labels)
-  print 'Validation set BEST NET error rate {} based on {} samples ({})'.format(
-      float(num_errors) / len(validation_data), len(validation_data), num_errors)
+      print 'We get WORSE results. on {} iteration. Total bad results {}'.format(i, num_worse)
+      num_worse += 1
+      if num_worse >= NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP:
+        break
   print 'Training finished. Write result...'
   data, _ = load_csv('kaggle/test.csv', False)
   with open('kaggle/report-vchigrin.csv', 'w') as f:
