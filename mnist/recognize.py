@@ -215,13 +215,22 @@ def main():
   num_worse = 0
   num_worse_for_rate = 0
   learn_rate = START_LEARN_RATE
+  num_train_examples = int(dataset.num_examples * (1 - VALIDATION_DATA_PART))
+  train_scheme = fuel.schemes.SequentialScheme(
+      examples = num_train_examples,
+      batch_size=BATCH_SIZE)
+  validation_scheme = fuel.schemes.SequentialScheme(
+      examples = range(num_train_examples, dataset.num_examples),
+      batch_size=BATCH_SIZE)
+  train_stream = fuel.transformers.Flatten(
+      fuel.streams.DataStream.default_stream(
+          dataset=dataset,
+          iteration_scheme=train_scheme))
+  validation_stream = fuel.transformers.Flatten(
+      fuel.streams.DataStream.default_stream(
+          dataset=dataset,
+          iteration_scheme=validation_scheme))
   for i in xrange(N_GENERATIONS):
-    train_scheme, validation_scheme = cross_validation_schemes[
-        i % len(cross_validation_schemes)]
-    train_stream = fuel.transformers.Flatten(
-        fuel.streams.DataStream.default_stream(
-            dataset=dataset,
-            iteration_scheme=train_scheme))
     print '----Train Generation {} at rate {}'.format(i, learn_rate)
     for batches in train_stream.get_epoch_iterator():
       label_to_batch = dict(zip(train_stream.sources, batches))
@@ -231,10 +240,6 @@ def main():
     num_errors, num_examples = count_errors(network, train_stream)
     print 'Training set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
-    validation_stream = fuel.transformers.Flatten(
-        fuel.streams.DataStream.default_stream(
-            dataset=dataset,
-            iteration_scheme=validation_scheme))
     num_errors, num_examples = count_errors(network, validation_stream)
     print 'Validation set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
