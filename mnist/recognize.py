@@ -23,28 +23,127 @@ VALIDATION_DATA_PART = 0.1
 NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
 NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 4
 
-class Network(object):
-  def __init__(self):
-    self._l0_coef = Network._rand_matrix(N_L0_UNITS, INPUT_SIZE)
-    self._l0_bias = Network._rand_matrix(N_L0_UNITS, 1)
-    self._l1_coef = Network._rand_matrix(N_L1_UNITS, N_L0_UNITS)
-    self._l1_bias = Network._rand_matrix(N_L1_UNITS, 1)
-    self._out_coef = Network._rand_matrix(N_OUTPUT_UNITS, N_L1_UNITS)
-    self._out_bias = Network._rand_matrix(N_OUTPUT_UNITS, 1)
+class Layer(object):
+  def forward_propagate(self, input_vector):
+    raise NotImplemented()
+
+  def num_params_matrices(self):
+    raise NotImplemented()
+
+  def compute_gradients_errors_vector(self, errors):
+    """
+    Returns one or more of vectors.
+    First - error gradients relative to this layer input,
+    required for error back propagation
+    Second and further, |num_params_matrices| total - gradients for that
+      layer's weights, biases, etc.
+
+    Must be called immediatelly after forward_propagate (used values, cached
+    by it).
+    """
+    raise NotImplemented()
+
+  def update_params(self, params_update_vectors):
+    """
+    weights_update_vectors - vectors in the same order as produced
+    by compute_gradients_errors_vector (shifted by one, that is without
+    gradients relative to vector input.
+    """
+    raise NotImplemented()
 
   @staticmethod
   def _rand_matrix(n_rows, n_columns):
     return np.random.rand(n_rows, n_columns) - 0.5
 
-  @staticmethod
-  def _sigmoid(val):
-    return 1 / (1 + np.exp(-val))
+
+class WeightsBiasLayer(Layer):
+  """
+  Intermediate class for fully connected layers computing
+  f(w*x+b)
+  """
+  def __init__(self, input_size, num_units):
+    super(WeightsBiasLayer, self).__init__()
+    self._input_size = input_size
+    self._num_units = num_units
+    self._weights = Layer._rand_matrix(num_units, input_size)
+    self._biases = Layer._rand_matrix(num_units, 1)
+
+  def _forward_propagate_with_function(self, input_vector, function):
+    assert not np.any(np.isnan(self._weights))
+    assert not np.any(np.isnan(self._biases))
+    assert input_vector.shape == (self._input_size, 1)
+    self._last_input = input_vector
+    self._last_activations_input = np.dot(self._weights, input_vector) + self._biases
+    assert self._last_activations_input.shape == (self._num_units, 1)
+    return function(self._last_activations_input)
+
+  def num_params_matrices(self):
+    return 2
+
+  def _errorrs_in_function_grad(self, errors):
+    """
+    Converts errors gradients of f(w * x + b) to gradients for errors of
+    (w * x + b). Subclasses must implement this.
+    """
+    raise NotImplemented()
+
+  def compute_gradients_errors_vector(self, errors):
+    assert errors.shape == (self._num_units, 1)
+    assert not np.any(np.isnan(errors))
+    errors_in_function_grad = self._errorrs_in_function_grad(errors)
+    assert not np.any(np.isnan(errors_in_function_grad))
+    assert errors_in_function_grad.shape == (self._num_units, 1)
+
+    weight_gradients = np.dot(
+        errors_in_function_grad, np.transpose(self._last_input))
+    assert weight_gradients.shape == self._weights.shape
+
+    input_gradients = np.dot(
+      np.transpose(self._weights), errors_in_function_grad)
+    assert input_gradients.shape == (self._input_size, 1)
+
+    biases_gradients = errors_in_function_grad
+    return [input_gradients, weight_gradients, biases_gradients]
+
+  def update_params(self, params_update_vectors):
+    weights_update, biases_update = params_update_vectors
+    self._weights += weights_update
+    self._biases += biases_update
+    assert not np.any(np.isnan(self._weights))
+    assert not np.any(np.isnan(self._biases))
+
+
+class ReLULayer(WeightsBiasLayer):
+  """
+  Fully connected to it input layer of ReLU units.
+  """
+  def forward_propagate(self, input_vector):
+    return self._forward_propagate_with_function(
+        input_vector, ReLULayer._relu)
+
+  def _errorrs_in_function_grad(self, errors):
+    result = self._last_activations_input.copy()
+    result[result > 0] = 1
+    result[result < 0] = 0.1
+    return result * errors
 
   @staticmethod
   def _relu(val):
     result = val.copy()
     result[result < 0] *= 0.1
     return result
+
+
+class SoftMaxLayer(WeightsBiasLayer):
+  """
+  Fully connected to it input layer of Softmax units.
+  """
+  def forward_propagate(self, input_vector):
+    return self._forward_propagate_with_function(
+        input_vector, SoftMaxLayer._softmax)
+
+  def _errorrs_in_function_grad(self, errors):
+    return errors
 
   @staticmethod
   def _softmax(input_values):
@@ -55,116 +154,65 @@ class Network(object):
     result = val_exp / denominator
     return result
 
+
+class Network(object):
+  def __init__(self):
+    self._layers = []
+    self._layers.append(ReLULayer(INPUT_SIZE, N_L0_UNITS))
+    self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS))
+    self._layers.append(SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS))
+
   def learn_batch(self, sample_matrices, labels, learn_rate):
-    out_coef_gradients = np.zeros(self._out_coef.shape)
-    out_bias_gradients = np.zeros(self._out_bias.shape)
-    l1_coef_gradients = np.zeros(self._l1_coef.shape)
-    l1_bias_gradients = np.zeros(self._l1_bias.shape)
-    l0_coef_gradients = np.zeros(self._l0_coef.shape)
-    l0_bias_gradients = np.zeros(self._l0_bias.shape)
+    gradients = []
     batch_size = 0
     for sample_matrix, label in itertools.izip(sample_matrices, labels):
-      out_coef, out_bias, l1_coef, l1_bias, l0_coef, l0_bias = self._process_sample(
-          sample_matrix,  label)
-      out_coef_gradients += out_coef
-      out_bias_gradients += out_bias
-      l1_coef_gradients += l1_coef
-      l1_bias_gradients += l1_bias
-      l0_coef_gradients += l0_coef
-      l0_bias_gradients += l0_bias
+      sample_gradients = self._process_sample(sample_matrix, label)
+      if not gradients:
+        gradients = sample_gradients
+      else:
+        for index, grad in enumerate(sample_gradients):
+          gradients[index] += grad
       batch_size += 1
-    # Average over all samples:
-    out_coef_gradients /= batch_size
-    out_bias_gradients /= batch_size
-    l1_coef_gradients /= batch_size
-    l1_bias_gradients /= batch_size
-    l0_coef_gradients /= batch_size
-    l0_bias_gradients /= batch_size
-    assert not np.any(np.isnan(out_coef_gradients))
-    assert not np.any(np.isnan(out_bias_gradients))
-    assert not np.any(np.isnan(l1_coef_gradients))
-    assert not np.any(np.isnan(l1_bias_gradients))
-    assert not np.any(np.isnan(l0_coef_gradients))
-    assert not np.any(np.isnan(l0_bias_gradients))
-    # Update:
-    self._out_coef -= learn_rate * out_coef_gradients
-    self._out_bias -= learn_rate * out_bias_gradients
-    self._l1_coef -= learn_rate * l1_coef_gradients
-    self._l1_bias -= learn_rate * l1_bias_gradients
-    self._l0_coef -= learn_rate * l0_coef_gradients
-    self._l0_bias -= learn_rate * l0_bias_gradients
-
+    # Update is equal to minus avg. gradient:
+    updates = []
+    for grad in gradients:
+      updates.append(-grad / batch_size)
+    cur_index = 0
+    for layer in self._layers:
+      next_index = cur_index + layer.num_params_matrices()
+      layer.update_params(updates[cur_index:next_index])
+      cur_index = next_index
 
   def _process_sample(self, sample_data, label):
-    assert not np.any(np.isnan(self._l0_coef))
-    assert not np.any(np.isnan(self._l0_bias))
-    assert not np.any(np.isnan(self._l1_coef))
-    assert not np.any(np.isnan(self._l1_bias))
     assert len(sample_data) == INPUT_SIZE
     sample_data = sample_data.reshape(INPUT_SIZE, 1)
-    l0_activations_input = np.dot(self._l0_coef, sample_data) + self._l0_bias
-    assert l0_activations_input.shape == (N_L0_UNITS, 1)
-    l0_activations = Network._relu(l0_activations_input)
-
-    l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
-    assert l1_activations_input.shape == (N_L1_UNITS, 1)
-    l1_activations = Network._relu(l1_activations_input)
-
-    out_activations_input = np.dot(self._out_coef, l1_activations) + self._out_bias
-    assert out_activations_input.shape == (N_OUTPUT_UNITS, 1)
-    out_activations = Network._softmax(out_activations_input)
-
+    cur_input = sample_data
+    for layer in self._layers:
+      cur_input = layer.forward_propagate(cur_input)
     expected_output = np.zeros([N_OUTPUT_UNITS, 1])
     expected_output[label, 0] = 1
+    assert cur_input.shape == expected_output.shape
     # Back-propagate errors
-    common_out_grad = out_activations - expected_output
-    assert common_out_grad.shape == (N_OUTPUT_UNITS, 1)
-    out_coef_gradients = np.dot(common_out_grad, np.transpose(l1_activations))
-    assert out_coef_gradients.shape == self._out_coef.shape
-    out_bias_gradients = common_out_grad
-
-    l1_grad_input = np.dot(np.transpose(self._out_coef), common_out_grad)
-    assert l1_grad_input.shape == (N_L1_UNITS, 1)
-    common_l1_grad = l1_activations.copy()
-    common_l1_grad[common_l1_grad > 0] = 1
-    common_l1_grad[common_l1_grad < 0] = 0.1
-    common_l1_grad *= l1_grad_input
-
-    assert common_l1_grad.shape == (N_L1_UNITS, 1)
-    l1_coef_gradients = np.dot(common_l1_grad, np.transpose(l0_activations))
-    assert l1_coef_gradients.shape == self._l1_coef.shape
-    l1_bias_gradients = common_l1_grad
-
-    l0_grad_input = np.dot(np.transpose(self._l1_coef), common_l1_grad)
-    assert l0_grad_input.shape == (N_L0_UNITS, 1)
-    common_l0_grad = l0_activations.copy()
-    common_l0_grad[common_l0_grad > 0] = 1
-    common_l0_grad[common_l0_grad < 0] = 0.1
-    common_l0_grad *= l0_grad_input
-
-    assert common_l0_grad.shape == (N_L0_UNITS, 1)
-    l0_coef_gradients = np.dot(common_l0_grad, np.transpose(sample_data))
-    assert l0_coef_gradients.shape == self._l0_coef.shape
-    l0_bias_gradients = common_l0_grad
-    return (out_coef_gradients, out_bias_gradients,
-        l1_coef_gradients, l1_bias_gradients,
-        l0_coef_gradients, l0_bias_gradients)
+    cur_errors = cur_input - expected_output
+    all_gradients = []
+    for layer in reversed(self._layers):
+      gradients = layer.compute_gradients_errors_vector(cur_errors)
+      cur_errors = gradients[0]
+      all_gradients.append(gradients[1:])
+    # Restore order of gradient update matrices
+    result = []
+    for gradients_list in reversed(all_gradients):
+      result.extend(gradients_list)
+    return result
 
   def recognize_sample(self, sample_data):
-    # INPUT_SIZE x 1
+    assert len(sample_data) == INPUT_SIZE
     sample_data = sample_data.reshape(INPUT_SIZE, 1)
-    l0_activation_input = np.dot(self._l0_coef, sample_data) + self._l0_bias
-    assert l0_activation_input.shape == (N_L0_UNITS, 1)
-    l0_activations = Network._relu(l0_activation_input)
+    cur_input = sample_data
+    for layer in self._layers:
+      cur_input = layer.forward_propagate(cur_input)
+    return np.argmax(cur_input)
 
-    l1_activations_input = np.dot(self._l1_coef, l0_activations) + self._l1_bias
-    assert l1_activations_input.shape == (N_L1_UNITS, 1)
-    l1_activations = Network._relu(l1_activations_input)
-
-    out_activations_input = np.dot(self._out_coef, l1_activations) + self._out_bias
-    assert out_activations_input.shape == (N_OUTPUT_UNITS, 1)
-    out_activations = Network._softmax(out_activations_input)
-    return np.argmax(out_activations)
 
 def count_errors(network, stream):
   num_errors = 0
