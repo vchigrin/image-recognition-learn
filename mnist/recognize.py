@@ -6,6 +6,7 @@ import fuel.schemes
 import fuel.streams
 import fuel.transformers
 import itertools
+import time
 
 N_L0_UNITS = 25
 N_L1_UNITS = 15
@@ -280,17 +281,24 @@ def main():
           iteration_scheme=validation_scheme))
   for i in xrange(N_GENERATIONS):
     print '----Train Generation {} at rate {}'.format(i, learn_rate)
+    start_time = time.time()
     for batches in train_stream.get_epoch_iterator():
       label_to_batch = dict(zip(train_stream.sources, batches))
       network.learn_batch(
           label_to_batch['pixels'],
           label_to_batch['labels'], learn_rate)
+    end_learn_time = time.time()
     num_errors, num_examples = count_errors(network, train_stream)
     print 'Training set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
     num_errors, num_examples = count_errors(network, validation_stream)
+    end_validation_time = time.time()
     print 'Validation set error rate {} based on {} samples ({})'.format(
         float(num_errors) / num_examples, num_examples, num_errors)
+    print(('Learning took {} sec.,' +
+        ' validation data {} sec.,').format(
+            end_learn_time - start_time,
+            end_validation_time - end_learn_time))
     if best_net is None or num_errors < best_validation_errors:
       print 'Updating best model'
       best_net = copy.deepcopy(network)
