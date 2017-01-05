@@ -123,10 +123,9 @@ class ReLULayer(WeightsBiasLayer):
         input_vector, ReLULayer._relu)
 
   def _errorrs_in_function_grad(self, errors):
-    result = self._last_activations_input.copy()
-    result[result > 0] = 1
-    result[result < 0] = 0.1
-    return result * errors
+    result = errors.copy()
+    result[self._last_activations_input < 0] *= 0.1
+    return result
 
   @staticmethod
   def _relu(val):
@@ -148,9 +147,7 @@ class SoftMaxLayer(WeightsBiasLayer):
 
   @staticmethod
   def _softmax(input_values):
-    values = input_values.copy()
-    values = values - values.min()
-    val_exp = np.exp(values)
+    val_exp = np.exp(input_values - input_values.min())
     denominator = val_exp.sum()
     result = val_exp / denominator
     return result
