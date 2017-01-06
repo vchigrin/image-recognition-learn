@@ -527,6 +527,7 @@ def main():
   with open('kaggle/report-vchigrin.csv', 'w') as f:
     f.write('ImageId,Label\n')
     for index, sample in enumerate(data):
+      sample = sample.reshape(INPUT_HEIGHT, INPUT_WIDTH)
       label = best_net.recognize_sample(sample)
       f.write('{},{}\n'.format(index + 1, label))
 
