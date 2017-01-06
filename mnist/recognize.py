@@ -159,24 +159,6 @@ class SoftMaxLayer(WeightsBiasLayer):
     return result
 
 
-def compute_convolution_kernel_gradient(
-    input_matrix, output_matrix, kernel_shape):
-  assert input_matrix.shape == output_matrix.shape
-  kernel_gradient = np.zeros(
-      kernel_shape,
-      dtype=np.float64)
-  for row in xrange(input_matrix.shape[0]):
-    for column in xrange(input_matrix.shape[1]):
-      for kernel_row in xrange(kernel_shape[0]):
-        for kernel_column in xrange(kernel_shape[1]):
-          if row < kernel_row or column  < kernel_column:
-            continue
-          kernel_gradient[kernel_row, kernel_column] += output_matrix[
-              row - kernel_row,
-              column - kernel_column] * input_matrix[
-                  row, column]
-  return kernel_gradient
-
 def compute_convolution_kernel_gradient_fast(
     input_matrix, output_matrix, kernel_shape):
   assert input_matrix.shape == output_matrix.shape
@@ -189,23 +171,6 @@ def compute_convolution_kernel_gradient_fast(
       input_rows - 1 : input_rows - 1 + kernel_rows,
       input_columns - 1 : input_columns - 1 + kernel_columns]
 
-
-
-  assert input_matrix.shape == output_matrix.shape
-  kernel_gradient = np.zeros(
-      kernel_shape,
-      dtype=np.float64)
-  for row in xrange(input_matrix.shape[0]):
-    for column in xrange(input_matrix.shape[1]):
-      for kernel_row in xrange(kernel_shape[0]):
-        for kernel_column in xrange(kernel_shape[1]):
-          if row < kernel_row or column  < kernel_column:
-            continue
-          kernel_gradient[kernel_row, kernel_column] += output_matrix[
-              row - kernel_row,
-              column - kernel_column] * input_matrix[
-                  row, column]
-  return kernel_gradient
 
 class ConvolutionLayer(Layer):
   """
@@ -303,9 +268,6 @@ class ConvolutionLayer(Layer):
         maxpool_gradients, kernel, mode='same')
     kernel_gradient = compute_convolution_kernel_gradient_fast(
         self._last_convolution_input, maxpool_gradients, kernel.shape)
-    #kernel_gradient_verify = compute_convolution_kernel_gradient(
-    #    self._last_comvolution_input, maxpool_gradients, self._kernel.shape)
-    #assert np.allclose(kernel_gradient, kernel_gradient_verify)
     return [input_gradients, kernel_gradient]
 
   def update_params(self, params_update_vectors):
