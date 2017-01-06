@@ -17,6 +17,7 @@ N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
 KERNEL_SIZE = 4
+KERNELS_COUNT = 3
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
 START_LEARN_RATE = 0.7
@@ -211,9 +212,12 @@ class ConvolutionLayer(Layer):
   Layer, that performs convoloution, ReLU to it output, and then performing
   max pooling.
   """
-  def __init__(self, input_shape, kernel_size, pooling_size):
+  def __init__(self, input_shape, kernel_size, kernels_count, pooling_size):
     super(ConvolutionLayer, self).__init__()
-    self._kernel = Layer._rand_matrix(kernel_size, kernel_size)
+    self._kernels = []
+    self._last_pooling_inputs = []
+    for _ in xrange(kernels_count):
+      self._kernels.append(Layer._rand_matrix(kernel_size, kernel_size))
     self._pooling_size = pooling_size
     self._input_shape = input_shape
     # Only support 2-D input at present
@@ -226,27 +230,54 @@ class ConvolutionLayer(Layer):
     self._output_shape = (output_rows, output_columns)
 
   def output_shape(self):
-    return self._output_shape
+    return (len(self._kernels), self._output_shape[0], self._output_shape[1])
 
   def forward_propagate(self, input_matrix):
     assert input_matrix.shape == self._input_shape
-    self._last_comvolution_input = input_matrix
-    self._last_pooling_input = relu(scipy.signal.convolve2d(
-        input_matrix, self._kernel, mode='same'))
-    result = np.empty(self._output_shape, dtype=np.float64)
+    self._last_convolution_input = input_matrix
+    self._last_pooling_inputs = []
+    for kernel in self._kernels:
+      self._last_pooling_inputs.append(relu(scipy.signal.convolve2d(
+          input_matrix, kernel, mode='same')))
+    result = np.empty(self.output_shape(), dtype=np.float64)
+    for index, pool_input in enumerate(self._last_pooling_inputs):
+      result[index, :, :] = self._pool_layer(pool_input)
+    return result
+
+  def _pool_layer(self, pooling_input):
+    result = np.empty(self._output_shape,  dtype=np.float64)
     for dst_row in xrange(self._output_shape[0]):
       for dst_column in xrange(self._output_shape[1]):
         src_start_row = dst_row * self._pooling_size
         src_start_column = dst_column * self._pooling_size
-        result[dst_row, dst_column] = self._last_pooling_input[
+        result[dst_row, dst_column] = pooling_input[
             src_start_row : src_start_row + self._pooling_size,
             src_start_column :  src_start_column + self._pooling_size].max()
     return result
 
   def num_params_matrices(self):
-    return 1
+    return len(self._kernels)
 
   def compute_gradients_errors_vector(self, errors):
+    total_input_gradient = np.zeros(
+        self._input_shape, dtype=np.float64)
+    kernel_gradients = []
+    assert len(self._kernels) == len(self._last_pooling_inputs)
+    for layer_number, inputs in enumerate(itertools.izip(
+          self._last_pooling_inputs, self._kernels)):
+      (last_pooling_input, kernel) = inputs
+      input_gradient, kernel_gradient = \
+          self._compute_gradients_errors_vector_by_kernel(
+              errors[layer_number,:,:],
+              last_pooling_input, kernel)
+      total_input_gradient += input_gradient
+      kernel_gradients.append(kernel_gradient)
+    result = [total_input_gradient]
+    result.extend(kernel_gradients)
+    return result
+
+  def _compute_gradients_errors_vector_by_kernel(
+      self, errors, last_pooling_input, kernel):
     assert errors.shape == self._output_shape
     maxpool_gradients = np.zeros(
         self._input_shape,
@@ -255,7 +286,7 @@ class ConvolutionLayer(Layer):
       for error_column in xrange(self._output_shape[1]):
         src_start_row = error_row * self._pooling_size
         src_start_column = error_column * self._pooling_size
-        max_index = self._last_pooling_input[
+        max_index = last_pooling_input[
             src_start_row : src_start_row + self._pooling_size,
             src_start_column :  src_start_column + self._pooling_size].argmax()
         src_row = src_start_row + max_index / self._pooling_size
@@ -265,20 +296,22 @@ class ConvolutionLayer(Layer):
     # Gradient needs only sign information. ReLU does not change sign,
     # so  using ReLU output instead of input seems safe.
     maxpool_gradients = relu_grad_times_errors(
-        self._last_pooling_input, maxpool_gradients)
+        last_pooling_input, maxpool_gradients)
     # Convert gradients dE / d(convolution output) to
     # gradient dE / d(input data) and dE / d(kernel)
     input_gradients = scipy.signal.convolve2d(
-        maxpool_gradients, self._kernel, mode='same')
+        maxpool_gradients, kernel, mode='same')
     kernel_gradient = compute_convolution_kernel_gradient_fast(
-        self._last_comvolution_input, maxpool_gradients, self._kernel.shape)
+        self._last_convolution_input, maxpool_gradients, kernel.shape)
     #kernel_gradient_verify = compute_convolution_kernel_gradient(
     #    self._last_comvolution_input, maxpool_gradients, self._kernel.shape)
     #assert np.allclose(kernel_gradient, kernel_gradient_verify)
     return [input_gradients, kernel_gradient]
 
   def update_params(self, params_update_vectors):
-    self._kernel += params_update_vectors[0]
+    assert len(self._kernels) == len(params_update_vectors)
+    for index, update in enumerate(params_update_vectors):
+      self._kernels[index] += update
 
 
 class VectorizingLayer(Layer):
@@ -290,7 +323,13 @@ class VectorizingLayer(Layer):
   def __init__(self, input_shape):
     super(VectorizingLayer, self).__init__()
     self._input_shape = input_shape
-    self._output_shape = (input_shape[0] * input_shape[1], 1)
+    total_elements = 1
+    for dim in input_shape:
+      total_elements *= dim
+    self._output_shape = (total_elements, 1)
+
+  def output_shape(self):
+    return self._output_shape
 
   def forward_propagate(self, input_vector):
     assert input_vector.shape == self._input_shape
@@ -310,13 +349,13 @@ class VectorizingLayer(Layer):
 class Network(object):
   def __init__(self):
     self._layers = []
-    convolution_layer = ConvolutionLayer(
-        (INPUT_WIDTH, INPUT_HEIGHT), KERNEL_SIZE, POOLING_SIZE)
-    self._layers.append(convolution_layer)
-    convolution_out_shape = convolution_layer.output_shape()
-    self._layers.append(VectorizingLayer(convolution_out_shape))
+    self._layers.append(
+        ConvolutionLayer(
+            (INPUT_WIDTH, INPUT_HEIGHT),
+            KERNEL_SIZE, KERNELS_COUNT, POOLING_SIZE))
+    self._layers.append(VectorizingLayer(self._layers[-1].output_shape()))
     self._layers.append(ReLULayer(
-        convolution_out_shape[0] * convolution_out_shape[1], N_L0_UNITS))
+        self._layers[-1].output_shape()[0], N_L0_UNITS))
     self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS))
     self._layers.append(SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS))
 
