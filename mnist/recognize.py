@@ -1,11 +1,14 @@
 #!/usr/bin/env python
+
 import copy
-import numpy as np
 import fuel.datasets
 import fuel.schemes
 import fuel.streams
 import fuel.transformers
 import itertools
+import numpy as np
+import scipy.signal
+import sys
 import time
 
 N_L0_UNITS = 25
@@ -13,6 +16,8 @@ N_L1_UNITS = 15
 N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
+KERNEL_SIZE = 4
+POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
 START_LEARN_RATE = 0.7
 MIN_LEARN_RATE = 0.0005
@@ -114,25 +119,25 @@ class WeightsBiasLayer(Layer):
     assert not np.any(np.isnan(self._biases))
 
 
+def relu(val):
+  result = val.copy()
+  result[result < 0] *= 0.1
+  return result
+
+def relu_grad_times_errors(relu_input, errors):
+  result = errors.copy()
+  result[relu_input < 0] *= 0.1
+  return result
+
 class ReLULayer(WeightsBiasLayer):
   """
   Fully connected to it input layer of ReLU units.
   """
   def forward_propagate(self, input_vector):
-    return self._forward_propagate_with_function(
-        input_vector, ReLULayer._relu)
+    return self._forward_propagate_with_function(input_vector, relu)
 
   def _errorrs_in_function_grad(self, errors):
-    result = errors.copy()
-    result[self._last_activations_input < 0] *= 0.1
-    return result
-
-  @staticmethod
-  def _relu(val):
-    result = val.copy()
-    result[result < 0] *= 0.1
-    return result
-
+    return relu_grad_times_errors(self._last_activations_input, errors)
 
 class SoftMaxLayer(WeightsBiasLayer):
   """
@@ -153,10 +158,165 @@ class SoftMaxLayer(WeightsBiasLayer):
     return result
 
 
+def compute_convolution_kernel_gradient(
+    input_matrix, output_matrix, kernel_shape):
+  assert input_matrix.shape == output_matrix.shape
+  kernel_gradient = np.zeros(
+      kernel_shape,
+      dtype=np.float64)
+  for row in xrange(input_matrix.shape[0]):
+    for column in xrange(input_matrix.shape[1]):
+      for kernel_row in xrange(kernel_shape[0]):
+        for kernel_column in xrange(kernel_shape[1]):
+          if row < kernel_row or column  < kernel_column:
+            continue
+          kernel_gradient[kernel_row, kernel_column] += output_matrix[
+              row - kernel_row,
+              column - kernel_column] * input_matrix[
+                  row, column]
+  return kernel_gradient
+
+def compute_convolution_kernel_gradient_fast(
+    input_matrix, output_matrix, kernel_shape):
+  assert input_matrix.shape == output_matrix.shape
+  # Note: [::-1,::-1] is equivalent to both np.flipud and np.fliplr.
+  grad_src = scipy.signal.convolve2d(
+    input_matrix[::-1,::-1], output_matrix, mode='full')[::-1,::-1]
+  input_rows, input_columns = input_matrix.shape
+  kernel_rows, kernel_columns = kernel_shape
+  return grad_src[
+      input_rows - 1 : input_rows - 1 + kernel_rows,
+      input_columns - 1 : input_columns - 1 + kernel_columns]
+
+
+
+  assert input_matrix.shape == output_matrix.shape
+  kernel_gradient = np.zeros(
+      kernel_shape,
+      dtype=np.float64)
+  for row in xrange(input_matrix.shape[0]):
+    for column in xrange(input_matrix.shape[1]):
+      for kernel_row in xrange(kernel_shape[0]):
+        for kernel_column in xrange(kernel_shape[1]):
+          if row < kernel_row or column  < kernel_column:
+            continue
+          kernel_gradient[kernel_row, kernel_column] += output_matrix[
+              row - kernel_row,
+              column - kernel_column] * input_matrix[
+                  row, column]
+  return kernel_gradient
+
+class ConvolutionLayer(Layer):
+  """
+  Layer, that performs convoloution, ReLU to it output, and then performing
+  max pooling.
+  """
+  def __init__(self, input_shape, kernel_size, pooling_size):
+    super(ConvolutionLayer, self).__init__()
+    self._kernel = Layer._rand_matrix(kernel_size, kernel_size)
+    self._pooling_size = pooling_size
+    self._input_shape = input_shape
+    # Only support 2-D input at present
+    assert len(input_shape) == 2
+    # We do not expect pooling that drops any data or that uses filling.
+    assert input_shape[0] % pooling_size == 0
+    assert input_shape[1] % pooling_size == 0
+    output_rows = input_shape[0] / pooling_size
+    output_columns = input_shape[1] / pooling_size
+    self._output_shape = (output_rows, output_columns)
+
+  def output_shape(self):
+    return self._output_shape
+
+  def forward_propagate(self, input_matrix):
+    assert input_matrix.shape == self._input_shape
+    self._last_comvolution_input = input_matrix
+    self._last_pooling_input = relu(scipy.signal.convolve2d(
+        input_matrix, self._kernel, mode='same'))
+    result = np.empty(self._output_shape, dtype=np.float64)
+    for dst_row in xrange(self._output_shape[0]):
+      for dst_column in xrange(self._output_shape[1]):
+        src_start_row = dst_row * self._pooling_size
+        src_start_column = dst_column * self._pooling_size
+        result[dst_row, dst_column] = self._last_pooling_input[
+            src_start_row : src_start_row + self._pooling_size,
+            src_start_column :  src_start_column + self._pooling_size].max()
+    return result
+
+  def num_params_matrices(self):
+    return 1
+
+  def compute_gradients_errors_vector(self, errors):
+    assert errors.shape == self._output_shape
+    maxpool_gradients = np.zeros(
+        self._input_shape,
+        dtype=np.float64)
+    for error_row in xrange(self._output_shape[0]):
+      for error_column in xrange(self._output_shape[1]):
+        src_start_row = error_row * self._pooling_size
+        src_start_column = error_column * self._pooling_size
+        max_index = self._last_pooling_input[
+            src_start_row : src_start_row + self._pooling_size,
+            src_start_column :  src_start_column + self._pooling_size].argmax()
+        src_row = src_start_row + max_index / self._pooling_size
+        src_column = src_start_column + max_index % self._pooling_size
+        maxpool_gradients[src_row, src_column] += errors[
+            error_row, error_column]
+    # Gradient needs only sign information. ReLU does not change sign,
+    # so  using ReLU output instead of input seems safe.
+    maxpool_gradients = relu_grad_times_errors(
+        self._last_pooling_input, maxpool_gradients)
+    # Convert gradients dE / d(convolution output) to
+    # gradient dE / d(input data) and dE / d(kernel)
+    input_gradients = scipy.signal.convolve2d(
+        maxpool_gradients, self._kernel, mode='same')
+    kernel_gradient = compute_convolution_kernel_gradient_fast(
+        self._last_comvolution_input, maxpool_gradients, self._kernel.shape)
+    #kernel_gradient_verify = compute_convolution_kernel_gradient(
+    #    self._last_comvolution_input, maxpool_gradients, self._kernel.shape)
+    #assert np.allclose(kernel_gradient, kernel_gradient_verify)
+    return [input_gradients, kernel_gradient]
+
+  def update_params(self, params_update_vectors):
+    self._kernel += params_update_vectors[0]
+
+
+class VectorizingLayer(Layer):
+  """
+  Very simple "Layer", do only reshape operation.
+  Need only to simplify transition from convolution to
+  fully connected layers.
+  """
+  def __init__(self, input_shape):
+    super(VectorizingLayer, self).__init__()
+    self._input_shape = input_shape
+    self._output_shape = (input_shape[0] * input_shape[1], 1)
+
+  def forward_propagate(self, input_vector):
+    assert input_vector.shape == self._input_shape
+    return input_vector.reshape(self._output_shape)
+
+  def num_params_matrices(self):
+    return 0
+
+  def compute_gradients_errors_vector(self, errors):
+    assert errors.shape == self._output_shape
+    return [errors.reshape(self._input_shape)]
+
+  def update_params(self, params_update_vectors):
+    pass
+
+
 class Network(object):
   def __init__(self):
     self._layers = []
-    self._layers.append(ReLULayer(INPUT_SIZE, N_L0_UNITS))
+    convolution_layer = ConvolutionLayer(
+        (INPUT_WIDTH, INPUT_HEIGHT), KERNEL_SIZE, POOLING_SIZE)
+    self._layers.append(convolution_layer)
+    convolution_out_shape = convolution_layer.output_shape()
+    self._layers.append(VectorizingLayer(convolution_out_shape))
+    self._layers.append(ReLULayer(
+        convolution_out_shape[0] * convolution_out_shape[1], N_L0_UNITS))
     self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS))
     self._layers.append(SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS))
 
@@ -182,8 +342,7 @@ class Network(object):
       cur_index = next_index
 
   def _process_sample(self, sample_data, label):
-    assert len(sample_data) == INPUT_SIZE
-    sample_data = sample_data.reshape(INPUT_SIZE, 1)
+    assert sample_data.shape == (INPUT_HEIGHT, INPUT_WIDTH)
     cur_input = sample_data
     for layer in self._layers:
       cur_input = layer.forward_propagate(cur_input)
@@ -204,8 +363,7 @@ class Network(object):
     return result
 
   def recognize_sample(self, sample_data):
-    assert len(sample_data) == INPUT_SIZE
-    sample_data = sample_data.reshape(INPUT_SIZE, 1)
+    assert sample_data.shape == (INPUT_HEIGHT, INPUT_WIDTH)
     cur_input = sample_data
     for layer in self._layers:
       cur_input = layer.forward_propagate(cur_input)
@@ -243,6 +401,13 @@ def load_csv(file_name, has_label):
   return data_arrays, label_arrays
 
 
+def make_image_matrix(input_batches):
+  labels, input_arrays = input_batches
+  new_arrays = []
+  for array in input_arrays:
+    new_arrays.append(array.reshape(INPUT_HEIGHT, INPUT_WIDTH))
+  return (labels, new_arrays)
+
 def main():
   network = Network()
   dataset = fuel.datasets.H5PYDataset(
@@ -268,18 +433,23 @@ def main():
   validation_scheme = fuel.schemes.SequentialScheme(
       examples = range(num_train_examples, dataset.num_examples),
       batch_size=BATCH_SIZE)
-  train_stream = fuel.transformers.Flatten(
+  train_stream = fuel.transformers.Mapping(
       fuel.streams.DataStream.default_stream(
           dataset=dataset,
-          iteration_scheme=train_scheme))
-  validation_stream = fuel.transformers.Flatten(
+          iteration_scheme=train_scheme),
+      make_image_matrix)
+  validation_stream = fuel.transformers.Mapping(
       fuel.streams.DataStream.default_stream(
           dataset=dataset,
-          iteration_scheme=validation_scheme))
+          iteration_scheme=validation_scheme),
+      make_image_matrix)
   for i in xrange(N_GENERATIONS):
     print '----Train Generation {} at rate {}'.format(i, learn_rate)
     start_time = time.time()
-    for batches in train_stream.get_epoch_iterator():
+    all_batches = list(train_stream.get_epoch_iterator())
+    for index, batches in enumerate(all_batches):
+      sys.stdout.write('Batch {}/{}\r'.format(index, len(all_batches)))
+      sys.stdout.flush()
       label_to_batch = dict(zip(train_stream.sources, batches))
       network.learn_batch(
           label_to_batch['pixels'],
