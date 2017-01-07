@@ -209,16 +209,11 @@ class ConvolutionLayer(Layer):
       result[index, :, :] = self._pool_layer(pool_input)
     return result
 
-  def _pool_layer(self, pooling_input):
-    result = np.empty(self._output_shape,  dtype=np.float64)
-    for dst_row in xrange(self._output_shape[0]):
-      for dst_column in xrange(self._output_shape[1]):
-        src_start_row = dst_row * self._pooling_size
-        src_start_column = dst_column * self._pooling_size
-        result[dst_row, dst_column] = pooling_input[
-            src_start_row : src_start_row + self._pooling_size,
-            src_start_column :  src_start_column + self._pooling_size].max()
-    return result
+  def _pool_layer(self,  pooling_input):
+    filtered = scipy.ndimage.filters.maximum_filter(
+        pooling_input,  size=self._pooling_size)
+    start = self._pooling_size / 2
+    return filtered[start::self._pooling_size, start::self._pooling_size]
 
   def num_params_matrices(self):
     return len(self._kernels)
