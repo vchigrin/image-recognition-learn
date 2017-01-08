@@ -10,6 +10,8 @@ import numpy as np
 import scipy.signal
 import sys
 import time
+import theano
+import theano.tensor as T
 
 N_L0_UNITS = 25
 N_L1_UNITS = 15
@@ -72,20 +74,34 @@ class WeightsBiasLayer(Layer):
     super(WeightsBiasLayer, self).__init__()
     self._input_size = input_size
     self._num_units = num_units
-    self._weights = Layer._rand_matrix(num_units, input_size)
-    self._biases = Layer._rand_matrix(num_units, 1)
+    self._weights = theano.shared(Layer._rand_matrix(num_units, input_size))
+    self._biases = theano.shared(Layer._rand_matrix(num_units, 1))
+    weights_update = T.dmatrix('weights_update')
+    biases_update = T.dmatrix('biases_update')
+    self._update_function = theano.function(
+        [weights_update,  biases_update],
+        [self._weights, self._biases],
+        updates=[
+          (self._weights, self._weights + weights_update),
+          (self._biases, self._biases + biases_update),
+        ])
+    self._last_input = theano.shared(np.zeros((input_size, 1)))
+    self._last_activations_input = theano.shared(np.zeros((num_units, 1)))
+    self._forward_propagate_updates = []
+
 
   def _forward_propagate_with_function(self, input_vector, function):
-    assert not np.any(np.isnan(self._weights))
-    assert not np.any(np.isnan(self._biases))
-    assert input_vector.shape == (self._input_size, 1)
-    self._last_input = input_vector
-    self._last_activations_input = np.dot(self._weights, input_vector) + self._biases
-    assert self._last_activations_input.shape == (self._num_units, 1)
-    return function(self._last_activations_input)
+    assert len(self._forward_propagate_updates) == 0
+    activations = T.dot(self._weights, input_vector) + self._biases
+    self._forward_propagate_updates.append([self._last_input, input_vector])
+    self._forward_propagate_updates.append([self._last_activations_input, activations])
+    return function(activations)
 
   def num_params_matrices(self):
     return 2
+
+  def get_forward_propagate_updates(self):
+    return self._forward_propagate_updates
 
   def _errorrs_in_function_grad(self, errors):
     """
@@ -95,40 +111,27 @@ class WeightsBiasLayer(Layer):
     raise NotImplemented()
 
   def compute_gradients_errors_vector(self, errors):
-    assert errors.shape == (self._num_units, 1)
-    assert not np.any(np.isnan(errors))
     errors_in_function_grad = self._errorrs_in_function_grad(errors)
-    assert not np.any(np.isnan(errors_in_function_grad))
-    assert errors_in_function_grad.shape == (self._num_units, 1)
 
-    weight_gradients = np.dot(
-        errors_in_function_grad, np.transpose(self._last_input))
-    assert weight_gradients.shape == self._weights.shape
+    weight_gradients = T.dot(
+        errors_in_function_grad, self._last_input.T)
 
-    input_gradients = np.dot(
-      np.transpose(self._weights), errors_in_function_grad)
-    assert input_gradients.shape == (self._input_size, 1)
+    input_gradients = T.dot(
+      self._weights.T, errors_in_function_grad)
 
     biases_gradients = errors_in_function_grad
     return [input_gradients, weight_gradients, biases_gradients]
 
   def update_params(self, params_update_vectors):
     weights_update, biases_update = params_update_vectors
-    self._weights += weights_update
-    self._biases += biases_update
-    assert not np.any(np.isnan(self._weights))
-    assert not np.any(np.isnan(self._biases))
+    self._update_function(weights_update, biases_update)
 
 
 def relu(val):
-  result = val.copy()
-  result[result < 0] *= 0.1
-  return result
+  return T.switch(T.lt(val,  0), val * 0.1, val)
 
 def relu_grad_times_errors(relu_input, errors):
-  result = errors.copy()
-  result[relu_input < 0] *= 0.1
-  return result
+  return T.switch(T.lt(relu_input, 0), errors * 0.1, errors)
 
 class ReLULayer(WeightsBiasLayer):
   """
@@ -153,7 +156,7 @@ class SoftMaxLayer(WeightsBiasLayer):
 
   @staticmethod
   def _softmax(input_values):
-    val_exp = np.exp(input_values - input_values.min())
+    val_exp = T.exp(input_values - input_values.min())
     denominator = val_exp.sum()
     result = val_exp / denominator
     return result
@@ -306,15 +309,36 @@ class VectorizingLayer(Layer):
 class Network(object):
   def __init__(self):
     self._layers = []
-    self._layers.append(
-        ConvolutionLayer(
-            (INPUT_WIDTH, INPUT_HEIGHT),
-            KERNEL_SIZE, KERNELS_COUNT, POOLING_SIZE))
-    self._layers.append(VectorizingLayer(self._layers[-1].output_shape()))
-    self._layers.append(ReLULayer(
-        self._layers[-1].output_shape()[0], N_L0_UNITS))
+    self._layers.append(ReLULayer(INPUT_SIZE, N_L0_UNITS))
     self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS))
     self._layers.append(SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS))
+    self._build_forward_propagate_function()
+    self._build_backward_propagate_function()
+
+  def _build_forward_propagate_function(self):
+    input_data = T.dmatrix('input_data')
+    cur_input = input_data
+    all_updates = []
+    for layer in self._layers:
+      cur_input = layer.forward_propagate(cur_input)
+      all_updates.extend(layer.get_forward_propagate_updates())
+    self._forward_propagate_function = theano.function(
+        [input_data], cur_input, updates=all_updates)
+
+  def _build_backward_propagate_function(self):
+    all_gradients = []
+    output_layer_errors = T.dmatrix('output_layer_errors')
+    cur_errors = output_layer_errors
+    for layer in reversed(self._layers):
+      gradients = layer.compute_gradients_errors_vector(cur_errors)
+      cur_errors = gradients[0]
+      all_gradients.append(gradients[1:])
+    # Restore order of gradient update matrices
+    result = []
+    for gradients_list in reversed(all_gradients):
+      result.extend(gradients_list)
+    self._backward_propagate_function = theano.function(
+         [output_layer_errors], result)
 
   def learn_batch(self, sample_matrices, labels, learn_rate):
     gradients = []
@@ -338,32 +362,21 @@ class Network(object):
       cur_index = next_index
 
   def _process_sample(self, sample_data, label):
-    assert sample_data.shape == (INPUT_HEIGHT, INPUT_WIDTH)
-    cur_input = sample_data
-    for layer in self._layers:
-      cur_input = layer.forward_propagate(cur_input)
+    assert sample_data.shape == (INPUT_SIZE,)
+    sample_data = sample_data.reshape(INPUT_SIZE, 1)
+    actual_output = self._forward_propagate_function(sample_data)
     expected_output = np.zeros([N_OUTPUT_UNITS, 1])
     expected_output[label, 0] = 1
-    assert cur_input.shape == expected_output.shape
+    assert actual_output.shape == expected_output.shape
     # Back-propagate errors
-    cur_errors = cur_input - expected_output
-    all_gradients = []
-    for layer in reversed(self._layers):
-      gradients = layer.compute_gradients_errors_vector(cur_errors)
-      cur_errors = gradients[0]
-      all_gradients.append(gradients[1:])
-    # Restore order of gradient update matrices
-    result = []
-    for gradients_list in reversed(all_gradients):
-      result.extend(gradients_list)
-    return result
+    errors = actual_output - expected_output
+    return self._backward_propagate_function(errors)
 
   def recognize_sample(self, sample_data):
-    assert sample_data.shape == (INPUT_HEIGHT, INPUT_WIDTH)
-    cur_input = sample_data
-    for layer in self._layers:
-      cur_input = layer.forward_propagate(cur_input)
-    return np.argmax(cur_input)
+    assert sample_data.shape == (INPUT_SIZE,)
+    sample_data = sample_data.reshape(INPUT_SIZE, 1)
+    result = self._forward_propagate_function(sample_data)
+    return np.argmax(result)
 
 
 def count_errors(network, stream):
@@ -429,16 +442,14 @@ def main():
   validation_scheme = fuel.schemes.SequentialScheme(
       examples = range(num_train_examples, dataset.num_examples),
       batch_size=BATCH_SIZE)
-  train_stream = fuel.transformers.Mapping(
+  train_stream = fuel.transformers.Flatten(
       fuel.streams.DataStream.default_stream(
           dataset=dataset,
-          iteration_scheme=train_scheme),
-      make_image_matrix)
-  validation_stream = fuel.transformers.Mapping(
+          iteration_scheme=train_scheme))
+  validation_stream = fuel.transformers.Flatten(
       fuel.streams.DataStream.default_stream(
           dataset=dataset,
-          iteration_scheme=validation_scheme),
-      make_image_matrix)
+          iteration_scheme=validation_scheme))
   for i in xrange(N_GENERATIONS):
     print '----Train Generation {} at rate {}'.format(i, learn_rate)
     start_time = time.time()
