@@ -37,3 +37,11 @@ Training set error rate 0.0327067669173 based on 39900 samples (1305)
 Validation set error rate 0.0295238095238 based on 2100 samples (62)
 We get WORSE results. on 77 iteration. Total bad results 9
 
+More neurons
+----Train Generation 6 at rate 0.005
+Training set cost 0.0614092507347, error rate 0.0198677248677 based on 37800 samples (751)
+Validation set cost 0.153553386615, error rate 0.0369047619048 based on 4200 samples (155)
+Learning took 16.4784388542 sec., validation data 9.19389414787 sec.,
+Updating best model
+----Train Generation 7 at rate 0.005
+

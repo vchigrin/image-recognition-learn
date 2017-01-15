@@ -15,8 +15,8 @@ import theano
 import theano.tensor as T
 import theano.compile.nanguardmode
 
-N_L0_UNITS = 25
-N_L1_UNITS = 15
+N_L0_UNITS = 85
+N_L1_UNITS = 25
 N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
@@ -24,7 +24,7 @@ KERNEL_SIZE = 4
 KERNELS_COUNT = 5
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
-START_LEARN_RATE = 0.1
+START_LEARN_RATE = 0.01
 MIN_LEARN_RATE = 0.0005
 N_GENERATIONS = 200
 BATCH_SIZE = 100
@@ -32,7 +32,7 @@ VALIDATION_DATA_PART = 0.1
 # If validation error will be worse then the best seen that number
 # of epochs in row, we'll stop learning and use best model that we've found.
 NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
-NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 4
+NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 2
 
 class Layer(object):
   def forward_propagate(self, input_vector):
@@ -62,7 +62,7 @@ class Layer(object):
 
   @staticmethod
   def _rand_matrix(n_rows, n_columns):
-    return np.random.rand(n_rows, n_columns) - 0.5
+    return (np.random.rand(n_rows, n_columns) - 0.5) * 0.1
 
 
 class WeightsBiasLayer(Layer):
