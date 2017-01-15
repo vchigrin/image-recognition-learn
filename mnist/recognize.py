@@ -6,6 +6,7 @@ import fuel.schemes
 import fuel.streams
 import fuel.transformers
 import itertools
+import math
 import numpy as np
 import scipy.signal
 import sys
@@ -366,17 +367,20 @@ class Network(object):
     # Back-propagate errors
     return self._backward_propagate_function(sample_data, expected_output)
 
-  def recognize_sample(self, sample_data):
+  def get_label_probabilities(self, sample_data):
     assert sample_data.shape == (INPUT_SIZE,)
     sample_data = sample_data.reshape(INPUT_SIZE, 1)
-    result = self._forward_propagate_function(sample_data)
-    return np.argmax(result)
+    return self._forward_propagate_function(sample_data)
+
+  def recognize_sample(self, sample_data):
+    return np.argmax(self.get_label_probabilities(sample_data))
 
 
 def count_errors(network, stream):
   num_errors = 0
   num_examples = 0
   all_batches = list(stream.get_epoch_iterator())
+  sum_cross_entropy = 0
   for index, batches in enumerate(all_batches):
     sys.stdout.write('Verify Batch {}/{}\r'.format(index, len(all_batches)))
     sys.stdout.flush()
@@ -384,10 +388,12 @@ def count_errors(network, stream):
     for sample, label in itertools.izip(
         label_to_batch['pixels'], label_to_batch['labels']):
       num_examples += 1
-      output_label = network.recognize_sample(sample)
+      probabilities = network.get_label_probabilities(sample)
+      sum_cross_entropy -= math.log(probabilities[label])
+      output_label = np.argmax(probabilities)
       if label[0] != output_label:
         num_errors += 1
-  return num_errors, num_examples
+  return num_errors, num_examples, sum_cross_entropy
 
 
 def load_csv(file_name, has_label):
@@ -461,21 +467,25 @@ def main():
           label_to_batch['pixels'],
           label_to_batch['labels'], learn_rate)
     end_learn_time = time.time()
-    num_errors, num_examples = count_errors(network, train_stream)
-    print 'Training set error rate {} based on {} samples ({})'.format(
+    num_errors, num_examples, sum_cross_entropy = count_errors(
+        network, train_stream)
+    print 'Training set cost {}, error rate {} based on {} samples ({})'.format(
+        sum_cross_entropy / num_examples,
         float(num_errors) / num_examples, num_examples, num_errors)
-    num_errors, num_examples = count_errors(network, validation_stream)
+    num_errors, num_examples, sum_cross_entropy = count_errors(
+        network, validation_stream)
     end_validation_time = time.time()
-    print 'Validation set error rate {} based on {} samples ({})'.format(
+    print 'Validation set cost {}, error rate {} based on {} samples ({})'.format(
+        sum_cross_entropy / num_examples,
         float(num_errors) / num_examples, num_examples, num_errors)
     print(('Learning took {} sec.,' +
         ' validation data {} sec.,').format(
             end_learn_time - start_time,
             end_validation_time - end_learn_time))
-    if best_net is None or num_errors < best_validation_errors:
+    if best_net is None or sum_cross_entropy < best_sum_cross_entropy:
       print 'Updating best model'
       best_net = copy.deepcopy(network)
-      best_validation_errors = num_errors
+      best_sum_cross_entropy = sum_cross_entropy
       num_worse = 0
       num_worse_for_rate = 0
     else:
