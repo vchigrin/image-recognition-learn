@@ -382,7 +382,10 @@ class Network(object):
 def count_errors(network, stream):
   num_errors = 0
   num_examples = 0
-  for batches in stream.get_epoch_iterator():
+  all_batches = list(stream.get_epoch_iterator())
+  for index, batches in enumerate(all_batches):
+    sys.stdout.write('Verify Batch {}/{}\r'.format(index, len(all_batches)))
+    sys.stdout.flush()
     label_to_batch = dict(zip(stream.sources, batches))
     for sample, label in itertools.izip(
         label_to_batch['pixels'], label_to_batch['labels']):
@@ -455,7 +458,7 @@ def main():
     start_time = time.time()
     all_batches = list(train_stream.get_epoch_iterator())
     for index, batches in enumerate(all_batches):
-      sys.stdout.write('Batch {}/{}\r'.format(index, len(all_batches)))
+      sys.stdout.write('Train Batch {}/{}\r'.format(index, len(all_batches)))
       sys.stdout.flush()
       label_to_batch = dict(zip(train_stream.sources, batches))
       network.learn_batch(
