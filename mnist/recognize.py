@@ -12,6 +12,7 @@ import sys
 import time
 import theano
 import theano.tensor as T
+import theano.compile.nanguardmode
 
 N_L0_UNITS = 25
 N_L1_UNITS = 15
@@ -42,9 +43,7 @@ class Layer(object):
   def compute_gradients_errors_vector(self, errors):
     """
     Returns one or more of vectors.
-    First - error gradients relative to this layer input,
-    required for error back propagation
-    Second and further, |num_params_matrices| total - gradients for that
+    |num_params_matrices| total - gradients for that
       layer's weights, biases, etc.
 
     Must be called immediatelly after forward_propagate (used values, cached
@@ -70,12 +69,16 @@ class WeightsBiasLayer(Layer):
   Intermediate class for fully connected layers computing
   f(w*x+b)
   """
-  def __init__(self, input_size, num_units):
+  def __init__(self, input_size, num_units, layer_name):
     super(WeightsBiasLayer, self).__init__()
     self._input_size = input_size
     self._num_units = num_units
-    self._weights = theano.shared(Layer._rand_matrix(num_units, input_size))
-    self._biases = theano.shared(Layer._rand_matrix(num_units, 1))
+    self._weights = theano.shared(
+        Layer._rand_matrix(num_units, input_size),
+        name='weights_' + layer_name)
+    self._biases = theano.shared(
+        Layer._rand_matrix(num_units, 1),
+        name='biases_' + layer_name)
     weights_update = T.dmatrix('weights_update')
     biases_update = T.dmatrix('biases_update')
     self._update_function = theano.function(
@@ -85,42 +88,20 @@ class WeightsBiasLayer(Layer):
           (self._weights, self._weights + weights_update),
           (self._biases, self._biases + biases_update),
         ])
-    self._last_input = theano.shared(np.zeros((input_size, 1)))
-    self._last_activations_input = theano.shared(np.zeros((num_units, 1)))
-    self._forward_propagate_updates = []
-
 
   def _forward_propagate_with_function(self, input_vector, function):
-    assert len(self._forward_propagate_updates) == 0
     activations = T.dot(self._weights, input_vector) + self._biases
-    self._forward_propagate_updates.append([self._last_input, input_vector])
-    self._forward_propagate_updates.append([self._last_activations_input, activations])
     return function(activations)
 
   def num_params_matrices(self):
     return 2
 
-  def get_forward_propagate_updates(self):
-    return self._forward_propagate_updates
-
-  def _errorrs_in_function_grad(self, errors):
-    """
-    Converts errors gradients of f(w * x + b) to gradients for errors of
-    (w * x + b). Subclasses must implement this.
-    """
-    raise NotImplemented()
-
   def compute_gradients_errors_vector(self, errors):
-    errors_in_function_grad = self._errorrs_in_function_grad(errors)
-
-    weight_gradients = T.dot(
-        errors_in_function_grad, self._last_input.T)
-
-    input_gradients = T.dot(
-      self._weights.T, errors_in_function_grad)
-
-    biases_gradients = errors_in_function_grad
-    return [input_gradients, weight_gradients, biases_gradients]
+    weight_gradients = T.grad(errors, self._weights,
+        disconnected_inputs='raise', add_names=True)
+    biases_gradients = T.grad(errors, self._biases,
+        disconnected_inputs='raise', add_names=True);
+    return [weight_gradients, biases_gradients]
 
   def update_params(self, params_update_vectors):
     weights_update, biases_update = params_update_vectors
@@ -128,7 +109,7 @@ class WeightsBiasLayer(Layer):
 
 
 def relu(val):
-  return T.switch(T.lt(val,  0), val * 0.1, val)
+  return T.nnet.relu(val, 0.1)
 
 def relu_grad_times_errors(relu_input, errors):
   return T.switch(T.lt(relu_input, 0), errors * 0.1, errors)
@@ -140,8 +121,6 @@ class ReLULayer(WeightsBiasLayer):
   def forward_propagate(self, input_vector):
     return self._forward_propagate_with_function(input_vector, relu)
 
-  def _errorrs_in_function_grad(self, errors):
-    return relu_grad_times_errors(self._last_activations_input, errors)
 
 class SoftMaxLayer(WeightsBiasLayer):
   """
@@ -151,15 +130,10 @@ class SoftMaxLayer(WeightsBiasLayer):
     return self._forward_propagate_with_function(
         input_vector, SoftMaxLayer._softmax)
 
-  def _errorrs_in_function_grad(self, errors):
-    return errors
-
   @staticmethod
   def _softmax(input_values):
-    val_exp = T.exp(input_values - input_values.min())
-    denominator = val_exp.sum()
-    result = val_exp / denominator
-    return result
+    # Softmax computes softmax along 1-st axis.
+    return T.nnet.softmax(input_values.T).T
 
 
 def compute_convolution_kernel_gradient_fast(
@@ -309,36 +283,59 @@ class VectorizingLayer(Layer):
 class Network(object):
   def __init__(self):
     self._layers = []
-    self._layers.append(ReLULayer(INPUT_SIZE, N_L0_UNITS))
-    self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS))
-    self._layers.append(SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS))
-    self._build_forward_propagate_function()
-    self._build_backward_propagate_function()
+    self._layers.append(ReLULayer(INPUT_SIZE, N_L0_UNITS, layer_name='layer0'))
+    self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS, layer_name='layer1'))
+    self._layers.append(
+        SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS, layer_name='layer2'))
+
+    input_theano_variable, output_theano_variable = \
+        self._build_forward_propagate_function()
+    self._build_backward_propagate_function(
+        input_theano_variable, output_theano_variable)
 
   def _build_forward_propagate_function(self):
     input_data = T.dmatrix('input_data')
     cur_input = input_data
-    all_updates = []
     for layer in self._layers:
       cur_input = layer.forward_propagate(cur_input)
-      all_updates.extend(layer.get_forward_propagate_updates())
     self._forward_propagate_function = theano.function(
-        [input_data], cur_input, updates=all_updates)
+        [input_data], cur_input)
+    theano.printing.pydotprint(
+        cur_input,
+        outfile="forward_propagate_unoptimized.png",
+        var_with_name_simple=True)
+    theano.printing.pydotprint(
+        self._forward_propagate_function,
+        outfile="forward_propagate_optimized.png",
+        var_with_name_simple=True)
+    return input_data, cur_input
 
-  def _build_backward_propagate_function(self):
+  def _build_backward_propagate_function(
+      self, input_theano_variable, output_theano_variable):
     all_gradients = []
-    output_layer_errors = T.dmatrix('output_layer_errors')
-    cur_errors = output_layer_errors
+
+    expected_output = T.dmatrix('expected_output')
+    # Back-propagate errors
+    cost = T.nnet.categorical_crossentropy(
+        output_theano_variable, expected_output).sum()
+    cost.name = 'Cost'
     for layer in reversed(self._layers):
-      gradients = layer.compute_gradients_errors_vector(cur_errors)
-      cur_errors = gradients[0]
-      all_gradients.append(gradients[1:])
+      gradients = layer.compute_gradients_errors_vector(cost)
+      all_gradients.append(gradients)
     # Restore order of gradient update matrices
     result = []
     for gradients_list in reversed(all_gradients):
       result.extend(gradients_list)
     self._backward_propagate_function = theano.function(
-         [output_layer_errors], result)
+         [input_theano_variable, expected_output], result)
+    theano.printing.pydotprint(
+        result,
+        outfile="backward_propagate_unoptimized.png",
+        var_with_name_simple=True)
+    theano.printing.pydotprint(
+        self._backward_propagate_function,
+        outfile="backward_propagate_optimized.png",
+        var_with_name_simple=True)
 
   def learn_batch(self, sample_matrices, labels, learn_rate):
     gradients = []
@@ -364,13 +361,10 @@ class Network(object):
   def _process_sample(self, sample_data, label):
     assert sample_data.shape == (INPUT_SIZE,)
     sample_data = sample_data.reshape(INPUT_SIZE, 1)
-    actual_output = self._forward_propagate_function(sample_data)
     expected_output = np.zeros([N_OUTPUT_UNITS, 1])
     expected_output[label, 0] = 1
-    assert actual_output.shape == expected_output.shape
     # Back-propagate errors
-    errors = actual_output - expected_output
-    return self._backward_propagate_function(errors)
+    return self._backward_propagate_function(sample_data, expected_output)
 
   def recognize_sample(self, sample_data):
     assert sample_data.shape == (INPUT_SIZE,)
@@ -421,6 +415,8 @@ def make_image_matrix(input_batches):
   return (labels, new_arrays)
 
 def main():
+  # theano.config.optimizer = 'None'
+  # theano.config.exception_verbosity = 'high'
   network = Network()
   dataset = fuel.datasets.H5PYDataset(
       'kaggle-mnist.hdf5', which_sets=('train',))
@@ -498,7 +494,7 @@ def main():
   with open('kaggle/report-vchigrin.csv', 'w') as f:
     f.write('ImageId,Label\n')
     for index, sample in enumerate(data):
-      sample = sample.reshape(INPUT_HEIGHT, INPUT_WIDTH)
+      sample = sample.reshape(INPUT_SIZE)
       label = best_net.recognize_sample(sample)
       f.write('{},{}\n'.format(index + 1, label))
 
