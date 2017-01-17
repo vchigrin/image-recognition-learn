@@ -45,3 +45,11 @@ Learning took 16.4784388542 sec., validation data 9.19389414787 sec.,
 Updating best model
 ----Train Generation 7 at rate 0.005
 
+Fix random state.
+----Train Generation 4 at rate 0.01
+Training set cost 0.0807682236485, error rate 0.0251851851852 based on 37800 samples (952)
+Validation set cost 0.145313244073, error rate 0.0397619047619 based on 4200 samples (167)
+Learning took 16.0847909451 sec., validation data 9.62074708939 sec.,
+Updating best model
+----Train Generation 5 at rate 0.01
+

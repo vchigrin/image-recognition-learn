@@ -34,6 +34,8 @@ VALIDATION_DATA_PART = 0.1
 NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
 NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 2
 
+DEFAULT_SEED = 12345
+
 class Layer(object):
   def forward_propagate(self, input_vector):
     raise NotImplemented()
@@ -70,15 +72,17 @@ class WeightsBiasLayer(Layer):
   Intermediate class for fully connected layers computing
   f(w*x+b)
   """
-  def __init__(self, input_size, num_units, layer_name):
+  def __init__(self, input_size, num_units, random_stream, layer_name):
     super(WeightsBiasLayer, self).__init__()
     self._input_size = input_size
     self._num_units = num_units
-    self._weights = theano.shared(
-        Layer._rand_matrix(num_units, input_size),
+    self._weights = theano.shared(random_stream.uniform(
+        low=-0.1, high=0.1,
+        size=(num_units, input_size)),
         name='weights_' + layer_name)
-    self._biases = theano.shared(
-        Layer._rand_matrix(num_units, 1),
+    self._biases = theano.shared(random_stream.uniform(
+        low=-0.1, high=0.1,
+        size=(num_units, 1)),
         name='biases_' + layer_name)
     weights_update = T.dmatrix('weights_update')
     biases_update = T.dmatrix('biases_update')
@@ -284,10 +288,14 @@ class VectorizingLayer(Layer):
 class Network(object):
   def __init__(self):
     self._layers = []
-    self._layers.append(ReLULayer(INPUT_SIZE, N_L0_UNITS, layer_name='layer0'))
-    self._layers.append(ReLULayer(N_L0_UNITS, N_L1_UNITS, layer_name='layer1'))
+    random_stream = np.random.RandomState(seed=DEFAULT_SEED)
     self._layers.append(
-        SoftMaxLayer(N_L1_UNITS, N_OUTPUT_UNITS, layer_name='layer2'))
+        ReLULayer(INPUT_SIZE, N_L0_UNITS, random_stream, layer_name='layer0'))
+    self._layers.append(
+        ReLULayer(N_L0_UNITS, N_L1_UNITS, random_stream, layer_name='layer1'))
+    self._layers.append(
+        SoftMaxLayer(
+            N_L1_UNITS, N_OUTPUT_UNITS, random_stream, layer_name='layer2'))
 
     input_theano_variable, output_theano_variable = \
         self._build_forward_propagate_function()
