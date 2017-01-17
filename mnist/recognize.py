@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/python -O
 
 import copy
 import fuel.datasets
@@ -36,6 +36,11 @@ NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
 NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 2
 
 DEFAULT_SEED = 12345
+
+FUNCTION_MODE = None
+
+if __debug__:
+  FUNCTION_MODE = theano.compile.nanguardmode.NanGuardMode()
 
 class Layer(object):
   def forward_propagate(self, input_vector):
@@ -96,7 +101,8 @@ class WeightsBiasLayer(Layer):
         ])
 
   def _forward_propagate_with_function(self, input_vector, function):
-    activations = T.dot(self._weights, input_vector) + self._biases
+    activations = T.dot(self._weights, input_vector)
+    activations = activations + T.addbroadcast(self._biases, 1)
     return function(activations)
 
   def num_params_matrices(self):
@@ -309,7 +315,8 @@ class Network(object):
     for layer in self._layers:
       cur_input = layer.forward_propagate(cur_input)
     self._forward_propagate_function = theano.function(
-        [input_data], cur_input)
+        [input_data], cur_input,
+        mode=FUNCTION_MODE)
     theano.d3viz.d3viz(
         cur_input,
         outfile="forward_propagate_unoptimized.html")
@@ -335,7 +342,8 @@ class Network(object):
     for gradients_list in reversed(all_gradients):
       result.extend(gradients_list)
     self._backward_propagate_function = theano.function(
-         [input_theano_variable, expected_output], result)
+         [input_theano_variable, expected_output], result,
+        mode=FUNCTION_MODE)
     theano.d3viz.d3viz(
         result,
         outfile="backward_propagate_unoptimized.html")
@@ -343,17 +351,28 @@ class Network(object):
         self._backward_propagate_function,
         outfile="backward_propagate_optimized.html")
 
+  @staticmethod
+  def batch_matrices_to_tensor(sample_matrices):
+    batch_size = len(sample_matrices)
+    batch_matrices = np.empty((INPUT_SIZE, batch_size))
+    for index, sample_matrix in enumerate(sample_matrices):
+      batch_matrices[:, index] = sample_matrix
+    return batch_matrices
+
+  @staticmethod
+  def batch_labels_to_tensor(labels):
+    batch_size = len(labels)
+    batch_output = np.zeros((N_OUTPUT_UNITS, batch_size))
+    for index, label in enumerate(labels):
+      batch_output[label, index] = 1
+    return batch_output
+
   def learn_batch(self, sample_matrices, labels, learn_rate):
-    gradients = []
-    batch_size = 0
-    for sample_matrix, label in itertools.izip(sample_matrices, labels):
-      sample_gradients = self._process_sample(sample_matrix, label)
-      if not gradients:
-        gradients = sample_gradients
-      else:
-        for index, grad in enumerate(sample_gradients):
-          gradients[index] += grad
-      batch_size += 1
+    batch_size = len(sample_matrices)
+    batch_matrices = Network.batch_matrices_to_tensor(sample_matrices)
+    batch_output = Network.batch_labels_to_tensor(labels)
+    gradients = self._backward_propagate_function(
+        batch_matrices, batch_output)
     # Update is equal to minus avg. gradient:
     updates = []
     for grad in gradients:
@@ -364,17 +383,7 @@ class Network(object):
       layer.update_params(updates[cur_index:next_index])
       cur_index = next_index
 
-  def _process_sample(self, sample_data, label):
-    assert sample_data.shape == (INPUT_SIZE,)
-    sample_data = sample_data.reshape(INPUT_SIZE, 1)
-    expected_output = np.zeros([N_OUTPUT_UNITS, 1])
-    expected_output[label, 0] = 1
-    # Back-propagate errors
-    return self._backward_propagate_function(sample_data, expected_output)
-
   def get_label_probabilities(self, sample_data):
-    assert sample_data.shape == (INPUT_SIZE,)
-    sample_data = sample_data.reshape(INPUT_SIZE, 1)
     return self._forward_propagate_function(sample_data)
 
   def recognize_sample(self, sample_data):
@@ -390,13 +399,20 @@ def count_errors(network, stream):
     sys.stdout.write('Verify Batch {}/{}\r'.format(index, len(all_batches)))
     sys.stdout.flush()
     label_to_batch = dict(zip(stream.sources, batches))
-    for sample, label in itertools.izip(
-        label_to_batch['pixels'], label_to_batch['labels']):
-      num_examples += 1
-      probabilities = network.get_label_probabilities(sample)
-      sum_cross_entropy -= math.log(probabilities[label])
-      output_label = np.argmax(probabilities)
-      if label[0] != output_label:
+    batch_matrices = Network.batch_matrices_to_tensor(
+        label_to_batch['pixels'])
+    expected_output = Network.batch_labels_to_tensor(
+        label_to_batch['labels'])
+    actual_output = network.get_label_probabilities(batch_matrices)
+    assert actual_output.shape == expected_output.shape
+    num_examples += len(label_to_batch['pixels'])
+    samples_cross_entropy = np.log(actual_output) * expected_output
+    sum_cross_entropy -= samples_cross_entropy.sum()
+    predicted_labels = actual_output.argmax(axis=0)
+    assert len(predicted_labels) == len(label_to_batch['labels'])
+    for label, predicted_label in itertools.izip(
+        label_to_batch['labels'], predicted_labels):
+      if label != predicted_label:
         num_errors += 1
   return num_errors, num_examples, sum_cross_entropy
 
@@ -426,8 +442,9 @@ def make_image_matrix(input_batches):
   return (labels, new_arrays)
 
 def main():
-  # theano.config.optimizer = 'None'
-  # theano.config.exception_verbosity = 'high'
+  if __debug__:
+    theano.config.optimizer = 'None'
+    theano.config.exception_verbosity = 'high'
   network = Network()
   dataset = fuel.datasets.H5PYDataset(
       'kaggle-mnist.hdf5', which_sets=('train',))
