@@ -12,6 +12,7 @@ import scipy.signal
 import sys
 import time
 import theano
+import theano.d3viz
 import theano.tensor as T
 import theano.compile.nanguardmode
 
@@ -309,14 +310,12 @@ class Network(object):
       cur_input = layer.forward_propagate(cur_input)
     self._forward_propagate_function = theano.function(
         [input_data], cur_input)
-    theano.printing.pydotprint(
+    theano.d3viz.d3viz(
         cur_input,
-        outfile="forward_propagate_unoptimized.png",
-        var_with_name_simple=True)
-    theano.printing.pydotprint(
+        outfile="forward_propagate_unoptimized.html")
+    theano.d3viz.d3viz(
         self._forward_propagate_function,
-        outfile="forward_propagate_optimized.png",
-        var_with_name_simple=True)
+        outfile="forward_propagate_optimized.html")
     return input_data, cur_input
 
   def _build_backward_propagate_function(
@@ -337,14 +336,12 @@ class Network(object):
       result.extend(gradients_list)
     self._backward_propagate_function = theano.function(
          [input_theano_variable, expected_output], result)
-    theano.printing.pydotprint(
+    theano.d3viz.d3viz(
         result,
-        outfile="backward_propagate_unoptimized.png",
-        var_with_name_simple=True)
-    theano.printing.pydotprint(
+        outfile="backward_propagate_unoptimized.html")
+    theano.d3viz.d3viz(
         self._backward_propagate_function,
-        outfile="backward_propagate_optimized.png",
-        var_with_name_simple=True)
+        outfile="backward_propagate_optimized.html")
 
   def learn_batch(self, sample_matrices, labels, learn_rate):
     gradients = []
