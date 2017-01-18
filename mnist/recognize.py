@@ -1,5 +1,6 @@
 #!/usr/bin/python -O
 
+import collections
 import copy
 import fuel.datasets
 import fuel.schemes
@@ -7,6 +8,7 @@ import fuel.streams
 import fuel.transformers
 import itertools
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 import scipy.signal
 import sys
@@ -41,6 +43,12 @@ FUNCTION_MODE = None
 
 if __debug__:
   FUNCTION_MODE = theano.compile.nanguardmode.NanGuardMode()
+
+ValueStat = collections.namedtuple('ValueStat',
+    ['min_val', 'max_val', 'avg_val'])
+
+LayerStat = collections.namedtuple('LayerStat',
+    ['weights_stat', 'biases_stat', 'weights_derivative', 'biases_derivative'])
 
 class Layer(object):
   def forward_propagate(self, input_vector):
@@ -114,6 +122,12 @@ class WeightsBiasLayer(Layer):
     biases_gradients = T.grad(errors, self._biases,
         disconnected_inputs='raise', add_names=True);
     return [weight_gradients, biases_gradients]
+
+  def get_weights(self):
+    return self._weights.get_value()
+
+  def get_biases(self):
+    return self._biases.get_value()
 
   def update_params(self, params_update_vectors):
     weights_update, biases_update = params_update_vectors
@@ -303,6 +317,9 @@ class Network(object):
     self._layers.append(
         SoftMaxLayer(
             N_L1_UNITS, N_OUTPUT_UNITS, random_stream, layer_name='layer2'))
+    self._layer_stat_lists = []
+    for _ in xrange(len(self._layers)):
+      self._layer_stat_lists.append([])
 
     input_theano_variable, output_theano_variable = \
         self._build_forward_propagate_function()
@@ -375,19 +392,79 @@ class Network(object):
         batch_matrices, batch_output)
     # Update is equal to minus avg. gradient:
     updates = []
+    grad_stats = []
     for grad in gradients:
-      updates.append(-grad / batch_size)
+      grad /= batch_size
+      grad_stats.append(compute_stats(grad))
+      updates.append(-grad)
     cur_index = 0
+    weights_stats = []
+    biases_stats = []
     for layer in self._layers:
+      weights_stats.append(compute_stats(layer.get_weights()))
+      biases_stats.append(compute_stats(layer.get_biases()))
       next_index = cur_index + layer.num_params_matrices()
       layer.update_params(updates[cur_index:next_index])
       cur_index = next_index
+    assert len(grad_stats) == 2 * len(weights_stats)
+    for index, lst in enumerate(self._layer_stat_lists):
+      lst.append(LayerStat(
+          weights_stats[index], biases_stats[index],
+          grad_stats[index * 2], grad_stats[index * 2 + 1]))
+
+  def get_layer_stats(self, layer_index):
+     return self._layer_stat_lists[layer_index]
 
   def get_label_probabilities(self, sample_data):
     return self._forward_propagate_function(sample_data)
 
   def recognize_sample(self, sample_data):
     return np.argmax(self.get_label_probabilities(sample_data))
+
+
+def compute_stats(tensor):
+  minimum = tensor.min()
+  maximum = tensor.max()
+  avg = np.average(tensor)
+  return ValueStat(minimum, maximum, avg)
+
+
+def plot_values(stats_list, field_name):
+  min_values = []
+  max_values = []
+  avg_values = []
+  for layer_stat in stats_list:
+    val_stat = layer_stat.__getattribute__(field_name)
+    min_values.append(val_stat.min_val)
+    max_values.append(val_stat.max_val)
+    avg_values.append(val_stat.avg_val)
+  plt.plot(min_values, 'b-', label='Minimum')
+  plt.plot(max_values, 'r-', label='Maximum')
+  plt.plot(avg_values, 'g-', label='Average')
+  plt.xlabel('Batch')
+  plt.ylabel('Stats')
+  plt.legend()
+
+def display_layer_stats(layer_index, stats_list):
+  plt.suptitle('Layer {0} dynamics'.format(layer_index))
+
+  plt.subplot(4, 1, 1)
+  plt.title('Weights')
+  plot_values(stats_list, 'weights_stat')
+
+  plt.subplot(4, 1, 2)
+  plt.title('Biases')
+  plot_values(stats_list, 'biases_stat')
+
+  plt.subplot(4, 1, 3)
+  plt.title('Weights gradient')
+  plot_values(stats_list, 'weights_derivative')
+
+  plt.subplot(4, 1, 4)
+  plt.title('Biases gradient')
+  plot_values(stats_list, 'biases_derivative')
+
+  plt.show()
 
 
 def count_errors(network, stream):
@@ -521,6 +598,8 @@ def main():
         print 'DECREASING LEARN RATE TO {}'.format(learn_rate)
         num_worse_for_rate = 0
 
+  for i_layer in xrange(3):
+    display_layer_stats(i_layer, best_net.get_layer_stats(i_layer))
   print 'Training finished. Write result...'
   data, _ = load_csv('kaggle/test.csv', False)
   with open('kaggle/report-vchigrin.csv', 'w') as f:
