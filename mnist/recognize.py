@@ -27,8 +27,8 @@ KERNEL_SIZE = 4
 KERNELS_COUNT = 5
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
-START_LEARN_RATE = 0.01
-MIN_LEARN_RATE = 0.0005
+START_LEARN_RATE = 0.1
+MIN_LEARN_RATE = 0.005
 N_GENERATIONS = 200
 BATCH_SIZE = 100
 VALIDATION_DATA_PART = 0.1
@@ -396,7 +396,7 @@ class Network(object):
     for grad in gradients:
       grad /= batch_size
       grad_stats.append(compute_stats(grad))
-      updates.append(-grad)
+      updates.append(-grad * learn_rate)
     cur_index = 0
     weights_stats = []
     biases_stats = []
@@ -605,8 +605,8 @@ def main():
   with open('kaggle/report-vchigrin.csv', 'w') as f:
     f.write('ImageId,Label\n')
     for index, sample in enumerate(data):
-      sample = sample.reshape(INPUT_SIZE)
-      label = best_net.recognize_sample(sample)
+      batch_matrix = Network.batch_matrices_to_tensor([sample])
+      label = best_net.recognize_sample(batch_matrix)
       f.write('{},{}\n'.format(index + 1, label))
 
 

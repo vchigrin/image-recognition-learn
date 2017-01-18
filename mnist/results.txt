@@ -53,3 +53,10 @@ Learning took 16.0847909451 sec., validation data 9.62074708939 sec.,
 Updating best model
 ----Train Generation 5 at rate 0.01
 
+Fix  absent learning rate
+----Train Generation 34 at rate 0.00625
+Training set cost 0.0145547069832, error rate 0.00201058201058 based on 37800 samples (76)
+Validation set cost 0.105035786989, error rate 0.027619047619 based on 4200 samples (116)
+Learning took 6.43647003174 sec., validation data 3.74054098129 sec.,
+Updating best model
+
