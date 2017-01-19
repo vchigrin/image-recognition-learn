@@ -47,7 +47,7 @@ if __debug__:
   FUNCTION_MODE = theano.compile.nanguardmode.NanGuardMode()
 
 ValueStat = collections.namedtuple('ValueStat',
-    ['min_val', 'max_val', 'avg_val'])
+    ['min_val', 'max_val', 'avg_val', 'sign_change_ratio'])
 
 LayerStat = collections.namedtuple('LayerStat',
     ['weights_stat', 'biases_stat', 'weights_derivative', 'biases_derivative'])
@@ -110,6 +110,8 @@ class WeightsBiasLayer(Layer):
           (self._biases, self._biases + biases_update),
         ],
         mode=FUNCTION_MODE)
+    self._prev_weights = None
+    self._prev_biases = None
 
   def _forward_propagate_with_function(self, input_vector, function):
     activations = T.dot(self._weights, input_vector)
@@ -132,7 +134,15 @@ class WeightsBiasLayer(Layer):
   def get_biases(self):
     return self._biases.get_value()
 
+  def get_prev_weights(self):
+    return self._prev_weights
+
+  def get_prev_biases(self):
+    return self._prev_biases
+
   def update_params(self, params_update_vectors):
+    self._prev_weights = self.get_weights()
+    self._prev_biases = self.get_biases()
     weights_update, biases_update = params_update_vectors
     self._update_function(weights_update, biases_update)
 
@@ -329,6 +339,8 @@ class Network(object):
     self._build_backward_propagate_function(
         input_theano_variable, output_theano_variable)
     self._accumulated_gradient_squares = None
+    self._prev_gradients = None
+    self._prev_params = None
 
   def _build_forward_propagate_function(self):
     input_data = T.dmatrix('input_data')
@@ -397,7 +409,12 @@ class Network(object):
     # Update is equal to minus avg. gradient:
     updates = []
     normalized_gradients = [g / batch_size for g in gradients]
-    grad_stats = [compute_stats(g) for g in normalized_gradients]
+    if self._prev_gradients is not None:
+      grad_stats = [compute_stats(g, old_g) for g, old_g in itertools.izip(
+          normalized_gradients, self._prev_gradients)]
+    else:
+      grad_stats = [compute_stats(g, None) for g in normalized_gradients]
+    self._prev_gradients = normalized_gradients
     if self._accumulated_gradient_squares is None:
       self._accumulated_gradient_squares = [
           g * g for g in normalized_gradients]
@@ -421,8 +438,10 @@ class Network(object):
     weights_stats = []
     biases_stats = []
     for layer in self._layers:
-      weights_stats.append(compute_stats(layer.get_weights()))
-      biases_stats.append(compute_stats(layer.get_biases()))
+      weights_stats.append(compute_stats(
+          layer.get_weights(), layer.get_prev_weights()))
+      biases_stats.append(compute_stats(layer.get_biases(),
+          layer.get_prev_biases()))
       next_index = cur_index + layer.num_params_matrices()
       layer.update_params(updates[cur_index:next_index])
       cur_index = next_index
@@ -442,25 +461,35 @@ class Network(object):
     return np.argmax(self.get_label_probabilities(sample_data))
 
 
-def compute_stats(tensor):
+def compute_stats(tensor, prev_tensor):
   minimum = tensor.min()
   maximum = tensor.max()
   avg = np.average(tensor)
-  return ValueStat(minimum, maximum, avg)
+  if prev_tensor is None:
+    sign_change_ratio = 0
+  else:
+    cur_sign = np.sign(tensor)
+    prev_sign = np.sign(prev_tensor)
+    sign_changes = (cur_sign != prev_sign).sum()
+    sign_change_ratio = float(sign_changes) / cur_sign.size
+  return ValueStat(minimum, maximum, avg, sign_change_ratio)
 
 
 def plot_values(stats_list, field_name):
   min_values = []
   max_values = []
   avg_values = []
+  sign_change_ratio_values = []
   for layer_stat in stats_list:
     val_stat = layer_stat.__getattribute__(field_name)
     min_values.append(val_stat.min_val)
     max_values.append(val_stat.max_val)
     avg_values.append(val_stat.avg_val)
+    sign_change_ratio_values.append(val_stat.sign_change_ratio)
   plt.plot(min_values, 'b-', label='Minimum')
   plt.plot(max_values, 'r-', label='Maximum')
   plt.plot(avg_values, 'g-', label='Average')
+  plt.plot(sign_change_ratio_values, 'y-', label='Sign change ratio')
   plt.xlabel('Batch')
   plt.ylabel('Stats')
   plt.legend()
