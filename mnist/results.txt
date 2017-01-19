@@ -60,3 +60,10 @@ Validation set cost 0.105035786989, error rate 0.027619047619 based on 4200 samp
 Learning took 6.43647003174 sec., validation data 3.74054098129 sec.,
 Updating best model
 
+Implement RMSProp
+----Train Generation 11 at rate 0.001
+Training set cost 0.0633471419195, error rate 0.0192063492063 based on 37800 samples (726)
+Validation set cost 0.125940000647, error rate 0.0352380952381 based on 4200 samples (148)
+Learning took 4.62384200096 sec., validation data 3.42601180077 sec.,
+Updating best model
+

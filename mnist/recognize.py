@@ -27,7 +27,9 @@ KERNEL_SIZE = 4
 KERNELS_COUNT = 5
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
-START_LEARN_RATE = 0.1
+START_LEARN_RATE = 0.001
+# How much use old, history date, relative to current batch gradients.
+RMSPROP_DECAY_RATE = 0.9
 MIN_LEARN_RATE = 0.005
 N_GENERATIONS = 200
 BATCH_SIZE = 100
@@ -106,7 +108,8 @@ class WeightsBiasLayer(Layer):
         updates=[
           (self._weights, self._weights + weights_update),
           (self._biases, self._biases + biases_update),
-        ])
+        ],
+        mode=FUNCTION_MODE)
 
   def _forward_propagate_with_function(self, input_vector, function):
     activations = T.dot(self._weights, input_vector)
@@ -325,6 +328,7 @@ class Network(object):
         self._build_forward_propagate_function()
     self._build_backward_propagate_function(
         input_theano_variable, output_theano_variable)
+    self._accumulated_gradient_squares = None
 
   def _build_forward_propagate_function(self):
     input_data = T.dmatrix('input_data')
@@ -392,11 +396,27 @@ class Network(object):
         batch_matrices, batch_output)
     # Update is equal to minus avg. gradient:
     updates = []
-    grad_stats = []
-    for grad in gradients:
-      grad /= batch_size
-      grad_stats.append(compute_stats(grad))
-      updates.append(-grad * learn_rate)
+    normalized_gradients = [g / batch_size for g in gradients]
+    grad_stats = [compute_stats(g) for g in normalized_gradients]
+    if self._accumulated_gradient_squares is None:
+      self._accumulated_gradient_squares = [
+          g * g for g in normalized_gradients]
+    else:
+      assert len(normalized_gradients) == len(
+          self._accumulated_gradient_squares)
+      for index in xrange(len(normalized_gradients)):
+        old_decayed = (self._accumulated_gradient_squares[index] *
+            RMSPROP_DECAY_RATE)
+        new = (normalized_gradients[index] * normalized_gradients[index] *
+            (1 - RMSPROP_DECAY_RATE))
+        self._accumulated_gradient_squares[index] = old_decayed + new
+
+    for index in xrange(len(normalized_gradients)):
+      # Add 10^-8 to prevent division-by-zero errors.
+      norm_factor = -np.sqrt(
+          10**(-8) + self._accumulated_gradient_squares[index])
+      update = (normalized_gradients[index] * learn_rate) / norm_factor
+      updates.append(update)
     cur_index = 0
     weights_stats = []
     biases_stats = []
@@ -481,9 +501,12 @@ def count_errors(network, stream):
     expected_output = Network.batch_labels_to_tensor(
         label_to_batch['labels'])
     actual_output = network.get_label_probabilities(batch_matrices)
+    assert not np.any(np.isnan(actual_output))
+    assert np.all(actual_output > 0)
     assert actual_output.shape == expected_output.shape
     num_examples += len(label_to_batch['pixels'])
     samples_cross_entropy = np.log(actual_output) * expected_output
+    assert not np.any(np.isnan(samples_cross_entropy))
     sum_cross_entropy -= samples_cross_entropy.sum()
     predicted_labels = actual_output.argmax(axis=0)
     assert len(predicted_labels) == len(label_to_batch['labels'])
