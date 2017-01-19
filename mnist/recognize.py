@@ -28,9 +28,10 @@ KERNELS_COUNT = 5
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
 START_LEARN_RATE = 0.001
+WEIGHT_DECAY_RATE = 0.005
 # How much use old, history date, relative to current batch gradients.
 RMSPROP_DECAY_RATE = 0.9
-MIN_LEARN_RATE = 0.005
+MIN_LEARN_RATE = 0.0001
 N_GENERATIONS = 200
 BATCH_SIZE = 100
 VALIDATION_DATA_PART = 0.1
@@ -112,6 +113,10 @@ class WeightsBiasLayer(Layer):
         mode=FUNCTION_MODE)
     self._prev_weights = None
     self._prev_biases = None
+
+  def get_regularization_expr(self):
+    weights_squares_sum = (self._weights * self._weights).sum()
+    return (WEIGHT_DECAY_RATE * weights_squares_sum) / 2
 
   def _forward_propagate_with_function(self, input_vector, function):
     activations = T.dot(self._weights, input_vector)
@@ -366,6 +371,8 @@ class Network(object):
     # Back-propagate errors
     cost = T.nnet.categorical_crossentropy(
         output_theano_variable, expected_output).sum()
+    for layer in self._layers:
+      cost += layer.get_regularization_expr()
     cost.name = 'Cost'
     for layer in reversed(self._layers):
       gradients = layer.compute_gradients_errors_vector(cost)

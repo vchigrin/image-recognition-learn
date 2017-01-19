@@ -67,3 +67,10 @@ Validation set cost 0.125940000647, error rate 0.0352380952381 based on 4200 sam
 Learning took 4.62384200096 sec., validation data 3.42601180077 sec.,
 Updating best model
 
+Add weight decay.
+----Train Generation 22 at rate 0.000125
+Training set cost 0.0213903598452, error rate 0.00486772486772 based on 37800 samples (184)
+Validation set cost 0.110816062389, error rate 0.0290476190476 based on 4200 samples (122)
+Learning took 7.23586606979 sec., validation data 3.61340808868 sec.,
+Updating best model
+
