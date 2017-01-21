@@ -18,8 +18,8 @@ import theano.d3viz
 import theano.tensor as T
 import theano.compile.nanguardmode
 
-N_L0_UNITS = 85
-N_L1_UNITS = 25
+N_L0_UNITS = 200
+N_L1_UNITS = 100
 N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
@@ -28,7 +28,7 @@ KERNELS_COUNT = 5
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
 START_LEARN_RATE = 0.001
-WEIGHT_DECAY_RATE = 0.005
+WEIGHT_DECAY_RATE = 0.08
 # How much use old, history date, relative to current batch gradients.
 RMSPROP_DECAY_RATE = 0.9
 MIN_LEARN_RATE = 0.0001
@@ -39,6 +39,7 @@ VALIDATION_DATA_PART = 0.1
 # of epochs in row, we'll stop learning and use best model that we've found.
 NUM_VALIDATION_SET_WORSINESS_TO_GIVE_UP = 10
 NUM_VALIDATION_SET_WORSINESS_TO_DECREASE_RATE = 2
+COMPUTE_STATS = False
 
 DEFAULT_SEED = 12345
 
@@ -469,6 +470,8 @@ class Network(object):
 
 
 def compute_stats(tensor, prev_tensor):
+  if not COMPUTE_STATS:
+    return None
   minimum = tensor.min()
   maximum = tensor.max()
   avg = np.average(tensor)
@@ -657,8 +660,9 @@ def main():
         print 'DECREASING LEARN RATE TO {}'.format(learn_rate)
         num_worse_for_rate = 0
 
-  for i_layer in xrange(3):
-    display_layer_stats(i_layer, best_net.get_layer_stats(i_layer))
+  if COMPUTE_STATS:
+    for i_layer in xrange(3):
+      display_layer_stats(i_layer, best_net.get_layer_stats(i_layer))
   print 'Training finished. Write result...'
   data, _ = load_csv('kaggle/test.csv', False)
   with open('kaggle/report-vchigrin.csv', 'w') as f:
