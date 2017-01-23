@@ -16,19 +16,20 @@ import time
 import theano
 import theano.d3viz
 import theano.tensor as T
+import theano.tensor.signal.pool
 import theano.compile.nanguardmode
 
-N_L0_UNITS = 200
-N_L1_UNITS = 100
+N_L0_UNITS = 75
+N_L1_UNITS = 25
 N_OUTPUT_UNITS = 10
 INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
 KERNEL_SIZE = 4
-KERNELS_COUNT = 5
+KERNELS_COUNT = 10
 POOLING_SIZE = 4
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
 START_LEARN_RATE = 0.001
-WEIGHT_DECAY_RATE = 0.08
+WEIGHT_DECAY_RATE = 0.02
 # How much use old, history date, relative to current batch gradients.
 RMSPROP_DECAY_RATE = 0.9
 MIN_LEARN_RATE = 0.0001
@@ -96,11 +97,11 @@ class WeightsBiasLayer(Layer):
     self._num_units = num_units
     self._weights = theano.shared(random_stream.uniform(
         low=-0.1, high=0.1,
-        size=(num_units, input_size)),
+        size=(input_size, num_units)),
         name='weights_' + layer_name)
     self._biases = theano.shared(random_stream.uniform(
         low=-0.1, high=0.1,
-        size=(num_units, 1)),
+        size=(1, num_units)),
         name='biases_' + layer_name)
     weights_update = T.dmatrix('weights_update')
     biases_update = T.dmatrix('biases_update')
@@ -120,8 +121,8 @@ class WeightsBiasLayer(Layer):
     return (WEIGHT_DECAY_RATE * weights_squares_sum) / 2
 
   def _forward_propagate_with_function(self, input_vector, function):
-    activations = T.dot(self._weights, input_vector)
-    activations = activations + T.addbroadcast(self._biases, 1)
+    activations = T.dot(input_vector, self._weights)
+    activations = activations + T.addbroadcast(self._biases, 0)
     return function(activations)
 
   def num_params_matrices(self):
@@ -177,8 +178,7 @@ class SoftMaxLayer(WeightsBiasLayer):
 
   @staticmethod
   def _softmax(input_values):
-    # Softmax computes softmax along 1-st axis.
-    return T.nnet.softmax(input_values.T).T
+    return T.nnet.softmax(input_values)
 
 
 def compute_convolution_kernel_gradient_fast(
@@ -199,12 +199,15 @@ class ConvolutionLayer(Layer):
   Layer, that performs convoloution, ReLU to it output, and then performing
   max pooling.
   """
-  def __init__(self, input_shape, kernel_size, kernels_count, pooling_size):
+  def __init__(self, input_shape, kernel_size, kernels_count, pooling_size,
+      random_stream,  layer_name):
     super(ConvolutionLayer, self).__init__()
-    self._kernels = []
-    self._last_pooling_inputs = []
-    for _ in xrange(kernels_count):
-      self._kernels.append(Layer._rand_matrix(kernel_size, kernel_size))
+    self._kernels = theano.shared(
+        random_stream.uniform(
+            low=-0.1, high=0.1,
+            size=(kernels_count, 1, kernel_size, kernel_size)),
+        name=layer_name + '_kernels')
+    self._kernels_count = kernels_count
     self._pooling_size = pooling_size
     self._input_shape = input_shape
     # Only support 2-D input at present
@@ -215,82 +218,43 @@ class ConvolutionLayer(Layer):
     output_rows = input_shape[0] / pooling_size
     output_columns = input_shape[1] / pooling_size
     self._output_shape = (output_rows, output_columns)
+    kernels_update = T.dtensor4('kernels_update')
+    self._kernel_update_fun = theano.function(
+       [kernels_update],
+       [self._kernels],
+       updates=[
+         (self._kernels, self._kernels + kernels_update)
+       ])
+
+  def get_weights(self):
+    return None
 
   def output_shape(self):
-    return (len(self._kernels), self._output_shape[0], self._output_shape[1])
+    return (self._kernels_count, self._output_shape[0], self._output_shape[1])
+
+  def get_regularization_expr(self):
+    return None
 
   def forward_propagate(self, input_matrix):
-    assert input_matrix.shape == self._input_shape
-    self._last_convolution_input = input_matrix
-    self._last_pooling_inputs = []
-    for kernel in self._kernels:
-      self._last_pooling_inputs.append(relu(scipy.signal.convolve2d(
-          input_matrix, kernel, mode='same')))
-    result = np.empty(self.output_shape(), dtype=np.float64)
-    for index, pool_input in enumerate(self._last_pooling_inputs):
-      result[index, :, :] = self._pool_layer(pool_input)
-    return result
-
-  def _pool_layer(self,  pooling_input):
-    filtered = scipy.ndimage.filters.maximum_filter(
-        pooling_input,  size=self._pooling_size)
-    start = self._pooling_size / 2
-    return filtered[start::self._pooling_size, start::self._pooling_size]
+    conv_output = T.nnet.conv2d(
+        input_matrix, self._kernels,
+        border_mode='valid')
+    pooled = T.signal.pool.pool_2d(
+        conv_output,
+        (self._pooling_size, self._pooling_size),
+        mode='max')
+    return T.nnet.relu(pooled)
 
   def num_params_matrices(self):
-    return len(self._kernels)
+    return 1
 
   def compute_gradients_errors_vector(self, errors):
-    total_input_gradient = np.zeros(
-        self._input_shape, dtype=np.float64)
-    kernel_gradients = []
-    assert len(self._kernels) == len(self._last_pooling_inputs)
-    for layer_number, inputs in enumerate(itertools.izip(
-          self._last_pooling_inputs, self._kernels)):
-      (last_pooling_input, kernel) = inputs
-      input_gradient, kernel_gradient = \
-          self._compute_gradients_errors_vector_by_kernel(
-              errors[layer_number,:,:],
-              last_pooling_input, kernel)
-      total_input_gradient += input_gradient
-      kernel_gradients.append(kernel_gradient)
-    result = [total_input_gradient]
-    result.extend(kernel_gradients)
-    return result
-
-  def _compute_gradients_errors_vector_by_kernel(
-      self, errors, last_pooling_input, kernel):
-    assert errors.shape == self._output_shape
-    maxpool_gradients = np.zeros(
-        self._input_shape,
-        dtype=np.float64)
-    for error_row in xrange(self._output_shape[0]):
-      for error_column in xrange(self._output_shape[1]):
-        src_start_row = error_row * self._pooling_size
-        src_start_column = error_column * self._pooling_size
-        max_index = last_pooling_input[
-            src_start_row : src_start_row + self._pooling_size,
-            src_start_column :  src_start_column + self._pooling_size].argmax()
-        src_row = src_start_row + max_index / self._pooling_size
-        src_column = src_start_column + max_index % self._pooling_size
-        maxpool_gradients[src_row, src_column] += errors[
-            error_row, error_column]
-    # Gradient needs only sign information. ReLU does not change sign,
-    # so  using ReLU output instead of input seems safe.
-    maxpool_gradients = relu_grad_times_errors(
-        last_pooling_input, maxpool_gradients)
-    # Convert gradients dE / d(convolution output) to
-    # gradient dE / d(input data) and dE / d(kernel)
-    input_gradients = scipy.signal.convolve2d(
-        maxpool_gradients, kernel, mode='same')
-    kernel_gradient = compute_convolution_kernel_gradient_fast(
-        self._last_convolution_input, maxpool_gradients, kernel.shape)
-    return [input_gradients, kernel_gradient]
+    kernel_grad = T.grad(errors, self._kernels,
+        disconnected_inputs='raise', add_names=True)
+    return [kernel_grad]
 
   def update_params(self, params_update_vectors):
-    assert len(self._kernels) == len(params_update_vectors)
-    for index, update in enumerate(params_update_vectors):
-      self._kernels[index] += update
+    self._kernel_update_fun(params_update_vectors[0])
 
 
 class VectorizingLayer(Layer):
@@ -301,25 +265,32 @@ class VectorizingLayer(Layer):
   """
   def __init__(self, input_shape):
     super(VectorizingLayer, self).__init__()
+    # Describes shapre without 0-dimension (zero dimension - number of
+    # training examples.
     self._input_shape = input_shape
-    total_elements = 1
+    self._total_elements = 1
     for dim in input_shape:
-      total_elements *= dim
-    self._output_shape = (total_elements, 1)
+      self._total_elements *= dim
 
-  def output_shape(self):
-    return self._output_shape
+  def total_elements(self):
+    return self._total_elements
 
-  def forward_propagate(self, input_vector):
-    assert input_vector.shape == self._input_shape
-    return input_vector.reshape(self._output_shape)
+  def forward_propagate(self, input_tensor):
+    batch_size = input_tensor.shape[0]
+    result_size = (batch_size, self._total_elements)
+    return input_tensor.reshape(result_size)
+
+  def get_regularization_expr(self):
+    return None
+
+  def get_weights(self):
+    return None
 
   def num_params_matrices(self):
     return 0
 
   def compute_gradients_errors_vector(self, errors):
-    assert errors.shape == self._output_shape
-    return [errors.reshape(self._input_shape)]
+    return []
 
   def update_params(self, params_update_vectors):
     pass
@@ -329,15 +300,26 @@ class Network(object):
   def __init__(self):
     self._layers = []
     random_stream = np.random.RandomState(seed=DEFAULT_SEED)
+
+    self._layers.append(ConvolutionLayer(
+        (INPUT_HEIGHT, INPUT_WIDTH),
+        KERNEL_SIZE,
+        KERNELS_COUNT,
+        POOLING_SIZE,
+        random_stream,
+        layer_name='conv_layer0'))
+    self._layers.append(VectorizingLayer(self._layers[-1].output_shape()))
+   # self._layers.append(
+   #     SoftMaxLayer(self._layers[-1].total_elements(), N_OUTPUT_UNITS, random_stream, layer_name='layer2'))
     self._layers.append(
-        ReLULayer(INPUT_SIZE, N_L0_UNITS, random_stream, layer_name='layer0'))
+        ReLULayer(self._layers[-1].total_elements(), N_L0_UNITS, random_stream, layer_name='layer0'))
     self._layers.append(
         ReLULayer(N_L0_UNITS, N_L1_UNITS, random_stream, layer_name='layer1'))
     self._layers.append(
         SoftMaxLayer(
             N_L1_UNITS, N_OUTPUT_UNITS, random_stream, layer_name='layer2'))
     self._layer_stat_lists = []
-    for _ in xrange(len(self._layers)):
+    for _ in xrange(len(self._layers) - 2):
       self._layer_stat_lists.append([])
 
     input_theano_variable, output_theano_variable = \
@@ -349,7 +331,7 @@ class Network(object):
     self._prev_params = None
 
   def _build_forward_propagate_function(self):
-    input_data = T.dmatrix('input_data')
+    input_data = T.dtensor4('input_data')
     cur_input = input_data
     for layer in self._layers:
       cur_input = layer.forward_propagate(cur_input)
@@ -373,7 +355,9 @@ class Network(object):
     cost = T.nnet.categorical_crossentropy(
         output_theano_variable, expected_output).sum()
     for layer in self._layers:
-      cost += layer.get_regularization_expr()
+      layer_regularization = layer.get_regularization_expr()
+      if layer_regularization is not None:
+        cost += layer_regularization
     cost.name = 'Cost'
     for layer in reversed(self._layers):
       gradients = layer.compute_gradients_errors_vector(cost)
@@ -395,17 +379,18 @@ class Network(object):
   @staticmethod
   def batch_matrices_to_tensor(sample_matrices):
     batch_size = len(sample_matrices)
-    batch_matrices = np.empty((INPUT_SIZE, batch_size))
+    batch_tensor = np.empty((batch_size, 1, INPUT_HEIGHT, INPUT_WIDTH))
     for index, sample_matrix in enumerate(sample_matrices):
-      batch_matrices[:, index] = sample_matrix
-    return batch_matrices
+      assert sample_matrix.shape == (INPUT_HEIGHT, INPUT_WIDTH)
+      batch_tensor[index, 0, :, :] = sample_matrix
+    return batch_tensor
 
   @staticmethod
   def batch_labels_to_tensor(labels):
     batch_size = len(labels)
-    batch_output = np.zeros((N_OUTPUT_UNITS, batch_size))
+    batch_output = np.zeros((batch_size, N_OUTPUT_UNITS))
     for index, label in enumerate(labels):
-      batch_output[label, index] = 1
+      batch_output[index, label] = 1
     return batch_output
 
   def learn_batch(self, sample_matrices, labels, learn_rate):
@@ -446,18 +431,22 @@ class Network(object):
     weights_stats = []
     biases_stats = []
     for layer in self._layers:
-      weights_stats.append(compute_stats(
-          layer.get_weights(), layer.get_prev_weights()))
-      biases_stats.append(compute_stats(layer.get_biases(),
-          layer.get_prev_biases()))
+      weights = layer.get_weights()
+      if weights is not None:
+        weights_stats.append(compute_stats(
+            weights, layer.get_prev_weights()))
+        biases_stats.append(compute_stats(layer.get_biases(),
+            layer.get_prev_biases()))
       next_index = cur_index + layer.num_params_matrices()
       layer.update_params(updates[cur_index:next_index])
       cur_index = next_index
-    assert len(grad_stats) == 2 * len(weights_stats)
+    grad_offset = 1 # For 1-st convolution layer
+    assert len(grad_stats) == 2 * len(weights_stats) + grad_offset
     for index, lst in enumerate(self._layer_stat_lists):
       lst.append(LayerStat(
           weights_stats[index], biases_stats[index],
-          grad_stats[index * 2], grad_stats[index * 2 + 1]))
+          grad_stats[grad_offset + index * 2],
+          grad_stats[grad_offset + index * 2 + 1]))
 
   def get_layer_stats(self, layer_index):
      return self._layer_stat_lists[layer_index]
@@ -547,7 +536,7 @@ def count_errors(network, stream):
     samples_cross_entropy = np.log(actual_output) * expected_output
     assert not np.any(np.isnan(samples_cross_entropy))
     sum_cross_entropy -= samples_cross_entropy.sum()
-    predicted_labels = actual_output.argmax(axis=0)
+    predicted_labels = actual_output.argmax(axis=1)
     assert len(predicted_labels) == len(label_to_batch['labels'])
     for label, predicted_label in itertools.izip(
         label_to_batch['labels'], predicted_labels):
@@ -580,6 +569,7 @@ def make_image_matrix(input_batches):
     new_arrays.append(array.reshape(INPUT_HEIGHT, INPUT_WIDTH))
   return (labels, new_arrays)
 
+
 def main():
   if __debug__:
     theano.config.optimizer = 'None'
@@ -608,14 +598,16 @@ def main():
   validation_scheme = fuel.schemes.SequentialScheme(
       examples = range(num_train_examples, dataset.num_examples),
       batch_size=BATCH_SIZE)
-  train_stream = fuel.transformers.Flatten(
+  train_stream = fuel.transformers.Mapping(
       fuel.streams.DataStream.default_stream(
           dataset=dataset,
-          iteration_scheme=train_scheme))
-  validation_stream = fuel.transformers.Flatten(
+          iteration_scheme=train_scheme),
+      make_image_matrix)
+  validation_stream = fuel.transformers.Mapping(
       fuel.streams.DataStream.default_stream(
           dataset=dataset,
-          iteration_scheme=validation_scheme))
+          iteration_scheme=validation_scheme),
+      make_image_matrix)
   for i in xrange(N_GENERATIONS):
     print '----Train Generation {} at rate {}'.format(i, learn_rate)
     start_time = time.time()
@@ -668,6 +660,7 @@ def main():
   with open('kaggle/report-vchigrin.csv', 'w') as f:
     f.write('ImageId,Label\n')
     for index, sample in enumerate(data):
+      sample = sample.reshape([INPUT_HEIGHT, INPUT_WIDTH])
       batch_matrix = Network.batch_matrices_to_tensor([sample])
       label = best_net.recognize_sample(batch_matrix)
       f.write('{},{}\n'.format(index + 1, label))
