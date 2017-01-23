@@ -96,3 +96,11 @@ Validation set cost 0.0393631147904, error rate 0.0116666666667 based on 4200 sa
 Learning took 11.9942810535 sec., validation data 7.79634094238 sec.,
 Updating best model
 
+-- Convolutional NN
+-- 16 4x4 kernels, 4 max-pooling, 0.04 weight decay, 75-25-10 units after conviolution.
+----Train Generation 143 at rate 0.0001
+Training set cost 0.00776642905876, error rate 0.00145502645503 based on 37800 samples (55)
+Validation set cost 0.0319699676291, error rate 0.0102380952381 based on 4200 samples (43)
+Learning took 14.8217339516 sec., validation data 7.51292705536 sec.,
+Updating best model
+
