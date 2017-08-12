@@ -34,7 +34,7 @@ INPUT_WIDTH = 28
 INPUT_HEIGHT = 28
 KERNEL_SIZE = 4
 KERNELS_COUNT = 16
-POOLING_SIZE = 4
+POOLING_SIZE = 2
 INPUT_SIZE = INPUT_WIDTH * INPUT_HEIGHT
 LEARN_RATE = 0.001
 WEIGHT_DECAY_RATE = 0.004
@@ -106,23 +106,27 @@ def main():
   conv_output = LeakyRectifier().apply(conv_layer.apply(in_sample))
 
   pool_layer = blocks.bricks.conv.MaxPooling(
+      input_dim=conv_layer.get_dim('output'),
       pooling_size=(POOLING_SIZE, POOLING_SIZE))
 
   pool_activations = pool_layer.apply(conv_output)
 
-  flattened = blocks.bricks.conv.Flattener().apply(
+  flattener = blocks.bricks.conv.Flattener()
+  flattener_output = flattener.apply(
       pool_activations)
 
+  flattener_output_size = 1
+  for dim in pool_layer.get_dim('output'):
+      flattener_output_size *= dim
   layer0 = blocks.bricks.Linear(
       name='layer 0',
-      input_dim=(INPUT_WIDTH * INPUT_HEIGHT * KERNELS_COUNT) / (
-          POOLING_SIZE * POOLING_SIZE),
+      input_dim=flattener_output_size,
       output_dim=N_L0_UNITS)
 
   layer0.weights_init = blocks.initialization.Uniform(mean=0, width=0.1)
   layer0.biases_init = blocks.initialization.Uniform(mean=0, width=0.1)
   layer0_activations = LeakyRectifier().apply(
-      layer0.apply(flattened))
+      layer0.apply(flattener_output))
 
   layer1 = blocks.bricks.Linear(
       name='layer 1',
