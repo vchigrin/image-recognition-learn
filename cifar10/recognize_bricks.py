@@ -59,17 +59,25 @@ class LeakyRectifier(blocks.bricks.Activation):
         return T.nnet.relu(input_, alpha=self._leak)
 
 
-def main():
-  if __debug__:
-    theano.config.optimizer = 'None'
-    theano.config.exception_verbosity = 'high'
-  dataset = fuel.datasets.CIFAR10(which_sets=('train',))
-  print 'Data loaded. Total examples {}'.format(
-       dataset.num_examples)
+def build_streams_for_dataset(dataset):
+  num_train_examples = int(dataset.num_examples * (1 - VALIDATION_DATA_PART))
+  validation_examples_range = range(num_train_examples, dataset.num_examples)
+  train_scheme = fuel.schemes.SequentialScheme(
+      examples=num_train_examples,
+      batch_size=BATCH_SIZE)
+  validation_scheme = fuel.schemes.SequentialScheme(
+      examples=validation_examples_range,
+      batch_size=BATCH_SIZE)
+  train_stream = fuel.streams.DataStream.default_stream(
+        dataset=dataset,
+        iteration_scheme=train_scheme)
+  validation_stream = fuel.streams.DataStream.default_stream(
+        dataset=dataset,
+        iteration_scheme=validation_scheme)
+  return  train_stream, validation_stream
 
-  in_sample = T.tensor4('features')
-  target = T.imatrix('targets')
 
+def build_network(in_sample):
   conv_layer = blocks.bricks.conv.Convolutional(
       filter_size=(KERNEL_SIZE, KERNEL_SIZE),
       num_filters=KERNELS_COUNT,
@@ -121,6 +129,22 @@ def main():
   output_activations = blocks.bricks.Softmax(
       name='computed_probabilities').apply(
           output_layer.apply(layer1_activations))
+  conv_layer.initialize()
+  pool_layer.initialize()
+  layer0.initialize()
+  layer1.initialize()
+  output_layer.initialize()
+  return output_activations
+
+
+def main():
+  if __debug__:
+    theano.config.optimizer = 'None'
+    theano.config.exception_verbosity = 'high'
+
+  in_sample = T.tensor4('features')
+  target = T.imatrix('targets')
+  output_activations = build_network(in_sample)
 
   cost = blocks.bricks.cost.CategoricalCrossEntropy().apply(
       target.flatten(), output_activations)
@@ -130,11 +154,12 @@ def main():
   raw_cost = cost
   raw_cost.name = 'raw_cost'
   computation_graph = blocks.graph.ComputationGraph(cost)
-  # Do not regularize Convolution layer kernels
-  #weights = blocks.filter.VariableFilter(roles=[blocks.roles.WEIGHT])(
-  #    computation_graph.variables)
-  weights = [layer0.W, layer1.W, output_layer.W]
+  weights = blocks.filter.VariableFilter(roles=[blocks.roles.WEIGHT])(
+      computation_graph.variables)
   for weight in weights:
+    # Do not regularize Convolution layer kernels
+    if blocks.roles.has_roles(weight, [blocks.roles.FILTER]):
+      continue
     cost = cost + WEIGHT_DECAY_RATE * (weight ** 2).sum()
   cost.name = 'cost_with_regularization'
   algorithm = blocks.algorithms.GradientDescent(
@@ -143,20 +168,11 @@ def main():
       step_rule=blocks.algorithms.RMSProp(
           learning_rate=LEARN_RATE, decay_rate=RMSPROP_DECAY_RATE))
 
-  num_train_examples = int(dataset.num_examples * (1 - VALIDATION_DATA_PART))
-  validation_examples_range = range(num_train_examples, dataset.num_examples)
-  train_scheme = fuel.schemes.SequentialScheme(
-      examples=num_train_examples,
-      batch_size=BATCH_SIZE)
-  validation_scheme = fuel.schemes.SequentialScheme(
-      examples=validation_examples_range,
-      batch_size=BATCH_SIZE)
-  train_stream = fuel.streams.DataStream.default_stream(
-        dataset=dataset,
-        iteration_scheme=train_scheme)
-  validation_stream = fuel.streams.DataStream.default_stream(
-        dataset=dataset,
-        iteration_scheme=validation_scheme)
+  dataset = fuel.datasets.CIFAR10(which_sets=('train',))
+  print 'Data loaded. Total examples {}'.format(
+       dataset.num_examples)
+  train_stream, validation_stream = build_streams_for_dataset(
+      dataset)
 
   monitor = blocks.extensions.monitoring.DataStreamMonitoring(
       variables=[raw_cost, cost, error_rate],
@@ -171,7 +187,6 @@ def main():
       prefix="train",
       after_epoch=False,
       after_batch=True)
-
   main_loop = blocks.main_loop.MainLoop(
       data_stream=train_stream,
       algorithm=algorithm,
@@ -196,11 +211,6 @@ def main():
               after_batch=True),
           blocks.extensions.Printing(),
       ])
-  conv_layer.initialize()
-  pool_layer.initialize()
-  layer0.initialize()
-  layer1.initialize()
-  output_layer.initialize()
   main_loop.run()
 
 
