@@ -67,7 +67,7 @@ def main():
   print 'Data loaded. Total examples {}'.format(
        dataset.num_examples)
 
-  in_sample = T.dtensor4('features')
+  in_sample = T.tensor4('features')
   target = T.imatrix('targets')
 
   conv_layer = blocks.bricks.conv.Convolutional(
