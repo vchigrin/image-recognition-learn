@@ -49,23 +49,6 @@ FUNCTION_MODE = None
 if __debug__:
   FUNCTION_MODE = theano.compile.nanguardmode.NanGuardMode()
 
-def load_csv(file_name, has_label):
-  data_arrays = []
-  label_arrays = []
-  with open(file_name, 'r') as f:
-    header = f.readline()
-    for line in f:
-      parts = [int(p) for p in line.strip().split(',')]
-      if has_label:
-        data = np.array(parts[1:], dtype=np.float64)
-        label_arrays.append(parts[0])
-      else:
-        data = np.array(parts, dtype=np.float64)
-      data /= 255.
-      data_arrays.append(data)
-  return data_arrays, label_arrays
-
-
 class LeakyRectifier(blocks.bricks.Activation):
     def __init__(self, leak=0.01, **kwargs):
         super(LeakyRectifier, self).__init__(**kwargs)
@@ -219,20 +202,6 @@ def main():
   layer1.initialize()
   output_layer.initialize()
   main_loop.run()
- # data, _ = load_csv('kaggle/test.csv', False)
- # forward_propagate_function = theano.function(
- #     [in_sample], output_activations,
- #     mode=FUNCTION_MODE)
- # labels = []
- # for index, sample in enumerate(data):
- #   sample = sample.reshape(1, 1, INPUT_HEIGHT, INPUT_WIDTH)
- #   labels_matrix = forward_propagate_function(sample)
- #   label = np.argmax(labels_matrix, axis=1)
- #   labels.append(label[0])
- # with open('kaggle/report-bricks-vchigrin.csv', 'w') as f:
- #   f.write('ImageId,Label\n')
- #   for index, label in enumerate(labels):
- #     f.write('{},{}\n'.format(index + 1, label))
 
 
 if __name__ == '__main__':
