@@ -128,11 +128,23 @@ def main():
       'conv_kernels',
       shape=(KERNEL_SIZE, KERNEL_SIZE, 1, KERNELS_COUNT))
 
+  kernels_summary = tf.transpose(conv_kernels, perm=[3, 0, 1, 2])
+  tf.summary.image(
+      'conv_kernels',
+      kernels_summary,
+      max_outputs=KERNELS_COUNT)
   conv_output = tf.nn.conv2d(
       in_sample,
       conv_kernels,
       strides=[1, 1, 1, 1],
       padding='SAME')
+  tf.summary.image(
+      'input',
+      in_sample)
+  tf.summary.image(
+      'kernel0_convolved',
+      conv_output[:,:,:,:1])
+
   conv_relu = tf.nn.relu(conv_output)
   pool_output = tf.nn.pool(
       conv_relu,
@@ -191,6 +203,9 @@ def main():
   train_stream, validation_stream = get_data_streams()
   writer = tf.summary.FileWriter("/home/slava/tf_graph", session.graph)
 
+  image_summaries = tf.summary.merge_all()
+
+  index_for_image_stat = 0
   try:
     for i_epoch in xrange(N_EPOCHS):
       print('Epoch {}\n'.format(i_epoch))
@@ -204,6 +219,15 @@ def main():
             feed_dict={
               in_sample: label_to_batch['pixels'],
               target: label_to_batch['labels']})
+        if index_for_image_stat % 100 == 0:
+          summary = session.run(
+              image_summaries,
+              feed_dict={
+                in_sample: label_to_batch['pixels']
+              })
+          writer.add_summary(summary, index_for_image_stat)
+        index_for_image_stat += 1
+
       report_statistics(
           train_stream,
           session,
