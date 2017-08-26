@@ -121,12 +121,14 @@ def report_statistics(
 
 
 def main():
+  tf.set_random_seed(12345)
   in_sample = tf.placeholder(tf.float32, [None, INPUT_HEIGHT, INPUT_WIDTH, 1])
   target = tf.placeholder(tf.float32, [None, N_OUTPUT_UNITS])
 
   conv_kernels = tf.get_variable(
       'conv_kernels',
-      shape=(KERNEL_SIZE, KERNEL_SIZE, 1, KERNELS_COUNT))
+      shape=(KERNEL_SIZE, KERNEL_SIZE, 1, KERNELS_COUNT),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
 
   kernels_summary = tf.transpose(conv_kernels, perm=[3, 0, 1, 2])
   tf.summary.image(
@@ -160,20 +162,32 @@ def main():
       shape=[-1, pooled_size])
 
 
-  layer0_weights = tf.get_variable('l0_weights', shape=(pooled_size, N_L0_UNITS))
-  layer0_biases = tf.get_variable('l0_biases', shape=(1, N_L0_UNITS))
+  layer0_weights = tf.get_variable(
+      'l0_weights',
+      shape=(pooled_size, N_L0_UNITS),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
+  layer0_biases = tf.get_variable(
+      'l0_biases', shape=(1, N_L0_UNITS),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
   layer0_output = tf.nn.relu(
       tf.matmul(pooling_lineralized, layer0_weights) + layer0_biases,
       'layer0_output')
 
-  layer1_weights = tf.get_variable('l1_weights', shape=(N_L0_UNITS, N_L1_UNITS))
-  layer1_biases = tf.get_variable('l1_biases', shape=(1, N_L1_UNITS))
+  layer1_weights = tf.get_variable(
+      'l1_weights', shape=(N_L0_UNITS, N_L1_UNITS),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
+  layer1_biases = tf.get_variable(
+      'l1_biases', shape=(1, N_L1_UNITS),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
   layer1_output = tf.nn.relu(
       tf.matmul(layer0_output, layer1_weights) + layer1_biases, 'layer1_output')
 
   output_weights = tf.get_variable(
-      'output_weights', shape=(N_L1_UNITS, N_OUTPUT_UNITS))
-  output_biases = tf.get_variable('output_biases', shape=(1, N_OUTPUT_UNITS))
+      'output_weights', shape=(N_L1_UNITS, N_OUTPUT_UNITS),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
+  output_biases = tf.get_variable(
+      'output_biases', shape=(1, N_OUTPUT_UNITS),
+      initializer=tf.random_uniform_initializer(-0.1, 0.1))
   result = tf.nn.softmax(
       tf.matmul(layer1_output, output_weights) + output_biases,
       name='result')
