@@ -18,12 +18,12 @@ SUMMARY_DIR = 'summaries'
 def random_initializer():
   return tf.random_uniform_initializer(-0.1, 0.1)
 
-def build_conv_layer(input_tensor, kernel_width, kernel_height, kernels_count):
+def build_conv_layer(input_tensor, kernel_size, pool_size, kernels_count):
   in_channels = int(input_tensor.shape[-1])
   kernels = tf.get_variable(
       'kernels',
       dtype=tf.float32,
-      shape=[kernel_height, kernel_width, in_channels, kernels_count],
+      shape=[kernel_size, kernel_size, in_channels, kernels_count],
       initializer=random_initializer())
   biases = tf.get_variable(
       'biases',
@@ -38,8 +38,8 @@ def build_conv_layer(input_tensor, kernel_width, kernel_height, kernels_count):
   conv_relu = tf.nn.relu(conv_output + biases)
   pooled = tf.nn.pool(
       conv_relu,
-      window_shape=[kernel_height, kernel_width],
-      strides=[kernel_height, kernel_width],
+      window_shape=[pool_size, pool_size],
+      strides=[pool_size, pool_size],
       pooling_type='MAX',
       padding='SAME')
   return pooled
@@ -113,9 +113,17 @@ def main():
   input_image, target_labels = input_pipeline()
 
   with tf.variable_scope('conv1_layer'):
-    current_output = build_conv_layer(input_image, 2, 2, 32)
+    current_output = build_conv_layer(
+        input_image,
+        kernel_size=4,
+        pool_size=2,
+        kernels_count=32)
   with tf.variable_scope('conv2_layer'):
-    current_output = build_conv_layer(current_output, 2, 2, 64)
+    current_output = build_conv_layer(
+        current_output,
+        kernel_size=4,
+        pool_size=2,
+        kernels_count=32)
   with tf.variable_scope('reshape_layer'):
     current_output = flatten(current_output)
   with tf.variable_scope('full3_layer'):
