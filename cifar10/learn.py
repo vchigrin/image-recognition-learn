@@ -89,7 +89,8 @@ def input_pipeline():
   image = tf.decode_raw(features['image_raw'], tf.uint8)
   label = tf.cast(features['label'], tf.int32)
 
-  image = tf.reshape(image, (IMAGE_HEIGHT, IMAGE_WIDTH, 3))
+  image = tf.reshape(image, (3, IMAGE_HEIGHT, IMAGE_WIDTH))
+  image = tf.transpose(image, [1, 2, 0])
   image = tf.cast(image, tf.float32) * (1. / 256.)
   labels = tf.one_hot(
       label,
