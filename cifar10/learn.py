@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+import os
 import tensorflow as tf
 
 IMAGE_WIDTH = 32
@@ -8,6 +9,10 @@ CLASSES_COUNT = 10
 TRAIN_FILE_NAME = 'cifar10-train.dat'
 NUM_EPOCHS = 5
 BATCH_SIZE = 100
+MODEL_DIR = 'model'
+MODEL_FILE_PREFIX = os.path.join(MODEL_DIR, 'cifarmodel')
+METAGRAPH_FILE = 'cifarmetagraph'
+SUMMARY_DIR = 'summaries'
 
 def random_initializer():
   return tf.random_uniform_initializer(-0.1, 0.1)
@@ -121,8 +126,21 @@ def main():
 
   accuracy = build_accuracy(final_output, target_labels)
 
+  tf.summary.scalar('cross_entropy', cross_entropy)
+  tf.summary.scalar('accuracy', accuracy)
+  merged_summaries = tf.summary.merge_all()
+  model_saver = tf.train.Saver(max_to_keep=5)
+
+  model_info = [input_image, target_labels, final_output]
+  for param in model_info:
+    tf.add_to_collection('model_info', param)
+  model_saver.export_meta_graph(
+      os.path.join(MODEL_DIR, METAGRAPH_FILE),
+      collection_list=['model_info'])
+
   with tf.Session() as session:
     with session.as_default():
+      summary_writer = tf.summary.FileWriter(SUMMARY_DIR, session.graph)
       session.run(tf.global_variables_initializer())
       session.run(tf.local_variables_initializer())
       coordinator = tf.train.Coordinator()
@@ -133,12 +151,18 @@ def main():
           step += 1
           session.run(train_step)
           if step % 10 == 0:
-            ce, acc = session.run([cross_entropy, accuracy])
+            ce, acc, summary = session.run(
+                [cross_entropy, accuracy, merged_summaries])
             print('After {} steps cross entropy {} accuracy {}'.format(
                 step, ce, acc))
+            summary_writer.add_summary(summary, step)
+            model_saver.save(session, MODEL_FILE_PREFIX, step)
       except tf.errors.OutOfRangeError as ex:
         print('Training finished, {} steps done'.format(step))
       finally:
+        file_path = model_saver.save(session, MODEL_FILE_PREFIX, step)
+        print('Final model saved to {}'.format(file_path))
+        summary_writer.close()
         coordinator.request_stop()
 
 if __name__ == '__main__':
