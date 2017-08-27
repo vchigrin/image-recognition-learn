@@ -2,6 +2,7 @@
 
 import os
 import tensorflow as tf
+import time
 
 IMAGE_WIDTH = 32
 IMAGE_HEIGHT = 32
@@ -138,6 +139,7 @@ def main():
       os.path.join(MODEL_DIR, METAGRAPH_FILE),
       collection_list=['model_info'])
 
+  prev_step_end = time.time()
   with tf.Session() as session:
     with session.as_default():
       summary_writer = tf.summary.FileWriter(SUMMARY_DIR, session.graph)
@@ -153,8 +155,11 @@ def main():
           if step % 10 == 0:
             ce, acc, summary = session.run(
                 [cross_entropy, accuracy, merged_summaries])
-            print('After {} steps cross entropy {} accuracy {}'.format(
-                step, ce, acc))
+            now = time.time()
+            print(('After {} steps cross entropy {} accuracy {}' +
+                  ' time since prev. report {} sec.').format(
+                step, ce, acc, now-prev_step_end))
+            prev_step_end = now
             summary_writer.add_summary(summary, step)
             model_saver.save(session, MODEL_FILE_PREFIX, step)
       except tf.errors.OutOfRangeError as ex:
