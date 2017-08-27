@@ -8,7 +8,7 @@ IMAGE_WIDTH = 32
 IMAGE_HEIGHT = 32
 CLASSES_COUNT = 10
 TRAIN_FILE_NAME = 'cifar10-train.dat'
-NUM_EPOCHS = 5
+NUM_EPOCHS = 15
 BATCH_SIZE = 100
 MODEL_DIR = 'model'
 MODEL_FILE_PREFIX = os.path.join(MODEL_DIR, 'cifarmodel')
@@ -108,9 +108,9 @@ def main():
   input_image, target_labels = input_pipeline()
 
   with tf.variable_scope('conv1_layer'):
-    current_output = build_conv_layer(input_image, 4, 4, 32)
+    current_output = build_conv_layer(input_image, 2, 2, 32)
   with tf.variable_scope('conv2_layer'):
-    current_output = build_conv_layer(current_output, 4, 4, 32)
+    current_output = build_conv_layer(current_output, 2, 2, 64)
   with tf.variable_scope('reshape_layer'):
     current_output = flatten(current_output)
   with tf.variable_scope('full3_layer'):
