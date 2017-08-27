@@ -25,12 +25,17 @@ def build_conv_layer(input_tensor, kernel_width, kernel_height, kernels_count):
       dtype=tf.float32,
       shape=[kernel_height, kernel_width, in_channels, kernels_count],
       initializer=random_initializer())
+  biases = tf.get_variable(
+      'biases',
+      dtype=tf.float32,
+      shape=[kernels_count],
+      initializer=random_initializer())
   conv_output = tf.nn.conv2d(
       input_tensor,
       kernels,
       strides=[1, 1, 1, 1],
       padding='SAME')
-  conv_relu = tf.nn.relu(conv_output)
+  conv_relu = tf.nn.relu(conv_output + biases)
   pooled = tf.nn.pool(
       conv_relu,
       window_shape=[kernel_height, kernel_width],
