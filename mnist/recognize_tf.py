@@ -1,15 +1,13 @@
 #!/usr/bin/python -Ou
 
 import collections
-import copy
 import fuel.datasets
 import fuel.schemes
 import fuel.streams
 import fuel.transformers
 import itertools
-import math
 import numpy as np
-import scipy.signal
+import os
 import sys
 import time
 import tensorflow as tf
@@ -27,11 +25,14 @@ LEARN_RATE = 0.0001
 WEIGHT_DECAY_RATE = 0.04
 # How much use old, history date, relative to current batch gradients.
 RMSPROP_DECAY_RATE = 0.9
-N_EPOCHS = 25
+N_EPOCHS = 5
 BATCH_SIZE = 100
 VALIDATION_DATA_PART = 0.1
 
 FUNCTION_MODE = None
+
+MODEL_DIR = "/home/slava/tf_model/"
+METARGAPH_FILE = "mymetagraph"
 
 def load_csv(file_name, has_label):
   data_arrays = []
@@ -217,9 +218,16 @@ def main():
   train_stream, validation_stream = get_data_streams()
   writer = tf.summary.FileWriter("/home/slava/tf_graph", session.graph)
 
+  saver = tf.train.Saver(max_to_keep=5)
   image_summaries = tf.summary.merge_all()
 
-  index_for_image_stat = 0
+  global_step = 0
+  model_info = [in_sample, result, target]
+  for var in model_info:
+    tf.add_to_collection('model_info', var)
+  saver.export_meta_graph(
+      os.path.join(MODEL_DIR, METARGAPH_FILE),
+      collection_list=["model_info"])
   try:
     for i_epoch in xrange(N_EPOCHS):
       print('Epoch {}\n'.format(i_epoch))
@@ -233,14 +241,16 @@ def main():
             feed_dict={
               in_sample: label_to_batch['pixels'],
               target: label_to_batch['labels']})
-        if index_for_image_stat % 100 == 0:
+        if global_step % 100 == 0:
           summary = session.run(
               image_summaries,
               feed_dict={
                 in_sample: label_to_batch['pixels']
               })
-          writer.add_summary(summary, index_for_image_stat)
-        index_for_image_stat += 1
+          writer.add_summary(summary, global_step)
+          file_path = saver.save(session, MODEL_DIR, global_step)
+          print('Model saved to {}'.format(file_path))
+        global_step += 1
 
       report_statistics(
           train_stream,
@@ -258,7 +268,69 @@ def main():
           'validation', writer)
   finally:
     writer.close()
+  file_path = saver.save(session, MODEL_DIR, global_step)
+  print('Final model saved to {}'.format(file_path))
 
+
+def process_sample(session, pixels, label, target_label, in_sample, result, target):
+  prediction = session.run(result, feed_dict={in_sample : [pixels]})
+  print('Actual label {} predicted {}'.format(label, np.argmax(prediction)))
+  print('Try make it {}...'.format(target_label))
+  cross_entropy = tf.reduce_sum(
+      -tf.reduce_sum(target * tf.log(result), reduction_indices=[1]))
+  cross_entropy_sum = tf.reduce_sum(cross_entropy)
+
+  grad = tf.gradients(cross_entropy_sum, in_sample)
+  target_sample = np.zeros(N_OUTPUT_UNITS)
+  target_sample[target_label] = 1
+
+  tf.summary.image('in_sample', in_sample)
+  tf.summary.scalar('orig_prob', result[0][label])
+  tf.summary.scalar('target_prob', result[0][target_label])
+  writer = tf.summary.FileWriter("/home/slava/tf_mutation", session.graph)
+  image_summaries = tf.summary.merge_all()
+  MUTATION_STEPS = 50
+  print pixels[14,:]
+  for i in xrange(MUTATION_STEPS):
+    summary = session.run(
+        image_summaries,
+        feed_dict={
+          in_sample: [pixels]
+        })
+    writer.add_summary(summary, i)
+    grads = session.run(grad, feed_dict={
+      target: [target_sample],
+      in_sample: [pixels]})
+    pixels = pixels - 0.1 * grads[0][0]
+    pixels = np.clip(pixels, 0, 1)
+    prediction = session.run(result, feed_dict={in_sample : [pixels]})
+    print('Predicted {} ({})'.format(np.argmax(prediction), prediction[0]))
+  summary = session.run(
+      image_summaries,
+      feed_dict={
+        in_sample: [pixels]
+      })
+  writer.add_summary(summary, MUTATION_STEPS)
+  writer.close()
+  print pixels[14,:]
+
+
+def use_model():
+  saver = tf.train.import_meta_graph(os.path.join(MODEL_DIR, METARGAPH_FILE))
+  session = tf.InteractiveSession()
+  saver.restore(session, os.path.join(MODEL_DIR, "-1890"))
+  (in_sample, result, target) = tf.get_collection('model_info')
+  train_stream, validation_stream = get_data_streams()
+  for batch_dict in train_stream.get_epoch_iterator(as_dict=True):
+    process_sample(
+        session,
+        batch_dict['pixels'][0],
+        np.argmax(batch_dict['labels'][0]),
+        5,
+        in_sample,
+        result,
+        target)
+    break
 
 if __name__ == '__main__':
-  main()
+  use_model()
