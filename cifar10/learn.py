@@ -13,7 +13,8 @@ BATCH_SIZE = 100
 MODEL_DIR_ROOT = 'model'
 METAGRAPH_FILE = 'cifarmetagraph'
 SUMMARY_DIR_ROOT = 'summaries'
-MODEL_NAME = '2conv-3full'
+MODEL_NAME = '2conv-3full-batch-norm'
+EPSILON = 0.1 ** 8
 
 def random_initializer():
   return tf.random_uniform_initializer(-0.1, 0.1)
@@ -25,17 +26,32 @@ def build_conv_layer(input_tensor, kernel_size, pool_size, kernels_count):
       dtype=tf.float32,
       shape=[kernel_size, kernel_size, in_channels, kernels_count],
       initializer=random_initializer())
-  biases = tf.get_variable(
-      'biases',
-      dtype=tf.float32,
-      shape=[kernels_count],
-      initializer=random_initializer())
   conv_output = tf.nn.conv2d(
       input_tensor,
       kernels,
       strides=[1, 1, 1, 1],
       padding='SAME')
-  conv_relu = tf.nn.relu(conv_output + biases)
+  offset = tf.get_variable(
+      'offset',
+      dtype=tf.float32,
+      shape=conv_output.shape[1:],
+      initializer=random_initializer())
+  scale = tf.get_variable(
+      'scale',
+      dtype=tf.float32,
+      shape=conv_output.shape[1:],
+      initializer=random_initializer())
+
+  mean, variance = tf.nn.moments(conv_output, axes=[0])
+  conv_normalized = tf.nn.batch_normalization(
+      conv_output,
+      mean,
+      variance,
+      offset,
+      scale,
+      EPSILON)
+
+  conv_relu = tf.nn.relu(conv_normalized)
   pooled = tf.nn.pool(
       conv_relu,
       window_shape=[pool_size, pool_size],
@@ -60,15 +76,31 @@ def build_linear_layer(input_tensor, num_units, activation_function):
       dtype=tf.float32,
       shape=[input_sample_size, num_units],
       initializer=random_initializer())
-  biases = tf.get_variable(
-      'biases',
+  linear_out = tf.matmul(input_tensor, weights)
+
+  offset = tf.get_variable(
+      'offset',
       dtype=tf.float32,
-      shape=[1, num_units],
+      shape=linear_out.shape[1:],
+
       initializer=random_initializer())
-  linear_out = tf.matmul(input_tensor, weights) + biases
+  scale = tf.get_variable(
+      'scale',
+      dtype=tf.float32,
+      shape=linear_out.shape[1:],
+      initializer=random_initializer())
+
+  mean, variance = tf.nn.moments(linear_out, axes=[0])
+  linear_normalized = tf.nn.batch_normalization(
+      linear_out,
+      mean,
+      variance,
+      offset,
+      scale,
+      EPSILON)
   if not activation_function:
-    return linear_out
-  return activation_function(linear_out, name='activations')
+    return linear_normalized
+  return activation_function(linear_normalized, name='activations')
 
 
 def build_accuracy(network_output, target_labels):
