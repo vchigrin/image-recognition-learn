@@ -10,10 +10,10 @@ CLASSES_COUNT = 10
 TRAIN_FILE_NAME = 'cifar10-train.dat'
 NUM_EPOCHS = 15
 BATCH_SIZE = 100
-MODEL_DIR = 'model'
-MODEL_FILE_PREFIX = os.path.join(MODEL_DIR, 'cifarmodel')
+MODEL_DIR_ROOT = 'model'
 METAGRAPH_FILE = 'cifarmetagraph'
-SUMMARY_DIR = 'summaries'
+SUMMARY_DIR_ROOT = 'summaries'
+MODEL_NAME = '2conv-3full'
 
 def random_initializer():
   return tf.random_uniform_initializer(-0.1, 0.1)
@@ -149,14 +149,19 @@ def main():
   model_info = [input_image, target_labels, final_output]
   for param in model_info:
     tf.add_to_collection('model_info', param)
+  model_dir = os.path.join(MODEL_DIR_ROOT, MODEL_NAME)
+  model_file_prefix = os.path.join(model_dir, 'cifarmodel')
+  os.mkdir(model_dir)
   model_saver.export_meta_graph(
-      os.path.join(MODEL_DIR, METAGRAPH_FILE),
+      os.path.join(model_dir, METAGRAPH_FILE),
       collection_list=['model_info'])
 
   prev_step_end = time.time()
   with tf.Session() as session:
     with session.as_default():
-      summary_writer = tf.summary.FileWriter(SUMMARY_DIR, session.graph)
+      summary_dir = os.path.join(SUMMARY_DIR_ROOT, MODEL_NAME)
+      os.mkdir(summary_dir)
+      summary_writer = tf.summary.FileWriter(summary_dir, session.graph)
       session.run(tf.global_variables_initializer())
       session.run(tf.local_variables_initializer())
       coordinator = tf.train.Coordinator()
@@ -175,11 +180,11 @@ def main():
                 step, ce, acc, now-prev_step_end))
             prev_step_end = now
             summary_writer.add_summary(summary, step)
-            model_saver.save(session, MODEL_FILE_PREFIX, step)
+            model_saver.save(session, model_file_prefix, step)
       except tf.errors.OutOfRangeError as ex:
         print('Training finished, {} steps done'.format(step))
       finally:
-        file_path = model_saver.save(session, MODEL_FILE_PREFIX, step)
+        file_path = model_saver.save(session, model_file_prefix, step)
         print('Final model saved to {}'.format(file_path))
         summary_writer.close()
         coordinator.request_stop()
